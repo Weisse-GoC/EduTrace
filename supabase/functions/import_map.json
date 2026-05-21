@@ -1,0 +1,7 @@
+{
+  "imports": {
+    "std/": "https://deno.land/std@0.177.0/",
+    "@supabase/supabase-client": "https://esm.sh/@supabase/supabase-client@2.39.7",
+    "ethers": "https://esm.sh/ethers@6.12.1"
+  }
+}
