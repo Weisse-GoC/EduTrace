@@ -1,7 +1,7 @@
 import { ethers } from "ethers";
 
 // 1. Validated contract address matching your Arbiscan receipt
-export const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS || "0xcb35A7469235568fDcD9651425DE69b0bb955DAE"; 
+export const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS; 
 
 export const CONTRACT_ABI = [
     {
@@ -44,7 +44,7 @@ export const CONTRACT_ABI = [
 
 export const getReadOnlyProvider = () => {
     // Falls back to your local environment file definition if available
-    return new ethers.JsonRpcProvider(import.meta.env.VITE_ARBITRUM_RPC || "https://sepolia-rollup.arbitrum.io/rpc");
+    return new ethers.JsonRpcProvider(import.meta.env.VITE_ARBITRUM_RPC);
 };
 
 export const getReadOnlyContract = () => {
