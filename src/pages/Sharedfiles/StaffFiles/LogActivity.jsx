@@ -1,3 +1,4 @@
+//src/pages/Sharedfiles/StaffFiles/LogActivity.jsx
 import { useEffect, useState } from "react";
 import { supabase } from "../../../services/supabaseClient";
 import { 
@@ -10,15 +11,15 @@ export default function LogActivity() {
   const [searchTerm, setSearchTerm] = useState("");
   const [isLive, setIsLive] = useState(false);
 
-  // Styling helper for action types
-  const getActionStyle = (action) => {
-    if (!action || typeof action !== 'string') return 'bg-gray-50 text-gray-600 border-gray-100';
-    const act = action.toUpperCase();
-    if (act.includes('REVOKE') || act.includes('REJECTED') || act.includes('DELETE')) 
+  // Styling helper for status types
+  const getActionStyle = (status) => {
+    if (!status || typeof status !== 'string') return 'bg-gray-50 text-gray-600 border-gray-100';
+    const stat = status.toUpperCase();
+    if (stat.includes('REVOKE') || stat.includes('REJECTED') || stat.includes('DELETE')) 
         return 'bg-red-50 text-red-600 border-red-100';
-    if (act.includes('ISSUE') || act.includes('VERIFIED') || act.includes('MINT')) 
+    if (stat.includes('Issued') || stat.includes('Verified') || stat.includes('MINT') || stat.includes('APPROVED')) 
         return 'bg-emerald-50 text-emerald-600 border-emerald-100';
-    if (act.includes('LOGIN') || act.includes('AUTH')) 
+    if (stat.includes('LOGIN') || stat.includes('AUTH') || stat.includes('PENDING')) 
         return 'bg-blue-50 text-blue-600 border-blue-100';
     return 'bg-indigo-50 text-indigo-600 border-indigo-100';
   };
@@ -27,9 +28,9 @@ export default function LogActivity() {
     const fetchLogs = async () => {
       try {
         const { data, error } = await supabase
-          .from('activity_logs')
+          .from('credentials')
           .select('*')
-          .order('created_at', { ascending: false })
+          .order('issued_at', { ascending: false })
           .limit(100);
 
         if (error) throw error;
@@ -43,12 +44,12 @@ export default function LogActivity() {
 
     fetchLogs();
 
-    // REAL-TIME SUBSCRIPTION: Listen for global inserts
+    // REAL-TIME SUBSCRIPTION: Listen for global inserts on credentials
     const channel = supabase
       .channel('global_audit_trail')
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'activity_logs' },
+        { event: 'INSERT', schema: 'public', table: 'credentials' },
         (payload) => {
           setLogs((prev) => [payload.new, ...prev].slice(0, 100)); // Keep only latest 100
         }
@@ -66,11 +67,11 @@ export default function LogActivity() {
   const filteredLogs = logs.filter(log => {
     const term = searchTerm.toLowerCase();
     return (
-      String(log.target_student_id || "").toLowerCase().includes(term) ||
-      String(log.target_student_name || "").toLowerCase().includes(term) ||
-      String(log.issuer_name || "").toLowerCase().includes(term) ||
-      String(log.action || "").toLowerCase().includes(term) ||
-      String(log.purpose || "").toLowerCase().includes(term)
+      String(log.school_id || "").toLowerCase().includes(term) ||
+      String(log.student_name || "").toLowerCase().includes(term) ||
+      String(log.issuer_id || "").toLowerCase().includes(term) ||
+      String(log.status || "").toLowerCase().includes(term) ||
+      String(log.document_type || "").toLowerCase().includes(term)
     );
   });
 
@@ -119,7 +120,7 @@ export default function LogActivity() {
         <div className="bg-white p-8 rounded-4xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow border-l-4 border-l-indigo-500">
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Registrar Events</p>
             <p className="text-4xl font-black text-indigo-600 tracking-tighter">
-              {logs.filter(l => l.role === 'staff' || l.issuer_name).length}
+              {logs.filter(l => l.issuer_id).length}
             </p>
         </div>
         <div className="bg-white p-8 rounded-4xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
@@ -155,14 +156,14 @@ export default function LogActivity() {
             </thead>
             <tbody className="divide-y divide-slate-50">
               {filteredLogs.map((log) => (
-                <tr key={log.id} className="hover:bg-indigo-50/30 transition-all group">
+                <tr key={log.application_id} className="hover:bg-indigo-50/30 transition-all group">
                   <td className="p-6">
                     <div className="flex flex-col gap-2">
-                      <span className={`w-fit px-4 py-1 rounded-full text-[10px] font-black uppercase border shadow-sm tracking-tight ${getActionStyle(log.action)}`}>
-                        {log.purpose || (typeof log.action === 'string' ? log.action.replace(/_/g, ' ') : "GENERAL_ACTION")}
+                      <span className={`w-fit px-4 py-1 rounded-full text-[10px] font-black uppercase border shadow-sm tracking-tight ${getActionStyle(log.status)}`}>
+                        {log.document_type || log.status || "CREDENTIAL_EVENT"}
                       </span>
                       <span className="text-[10px] font-mono text-slate-300 group-hover:text-indigo-400 transition-colors">
-                        UUID: {log.id.toString().substring(0, 18)}...
+                        APP_ID: {log.application_id?.toString().substring(0, 18)}...
                       </span>
                     </div>
                   </td>
@@ -174,10 +175,10 @@ export default function LogActivity() {
                       </div>
                       <div className="flex flex-col">
                         <span className="text-sm font-black text-slate-700 leading-tight">
-                          {log.issuer_name || "System Core"}
+                          {log.status === 'PENDING' ? "System Queue" : "Registrar Node"}
                         </span>
                         <span className="text-[10px] font-black font-mono text-slate-400 uppercase tracking-tighter">
-                          REG_AUTH: {log.user_id?.substring(0, 10) || "AUTO"}
+                          AUTH: {log.issuer_id?.substring(0, 10) || "AUTO"}
                         </span>
                       </div>
                     </div>
@@ -190,10 +191,10 @@ export default function LogActivity() {
                       </div>
                       <div className="flex flex-col">
                         <span className="text-sm font-black text-slate-800 leading-tight">
-                          {log.target_student_name || "Network Broadcast"}
+                          {log.student_name || "Unknown Identity"}
                         </span>
                         <span className="text-[10px] font-black font-mono text-indigo-500 tracking-tighter">
-                          STU_ID: {log.target_student_id || "00-0000"}
+                          STU_ID: {log.school_id || "00-0000"}
                         </span>
                       </div>
                     </div>
@@ -204,11 +205,11 @@ export default function LogActivity() {
                         <div className="flex items-center gap-2 text-slate-700">
                           <Clock size={12} className="text-indigo-500" />
                           <span className="text-xs font-black">
-                            {log.created_at ? new Date(log.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : "Recently"}
+                            {log.issued_at ? new Date(log.issued_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : "Recently"}
                           </span>
                         </div>
                         <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-                          {log.created_at ? new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : "Pending"}
+                          {log.issued_at ? new Date(log.issued_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : "Pending"}
                         </span>
                     </div>
                   </td>
