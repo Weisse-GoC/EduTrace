@@ -16,6 +16,9 @@ import {
     Lock
 } from 'lucide-react';
 
+// Unified decentralized IPFS gateway asset endpoint
+const IPFS_GATEWAY = "https://gateway.pinata.cloud/ipfs/";
+
 export default function PublicVerification() {
     const { id } = useParams(); 
     const [status, setStatus] = useState('loading'); 
@@ -25,7 +28,7 @@ export default function PublicVerification() {
     useEffect(() => {
         const verifyDocument = async () => {
             try {
-                // 1. Fetch metadata from Supabase
+                // 1. Fetch metadata from credentials matching the application_id
                 const { data, error } = await supabase
                     .from('credentials')
                     .select('*')
@@ -78,10 +81,15 @@ export default function PublicVerification() {
         );
     }
 
-    // Helper utility to detect if the storage link points to a raw rendering image asset
-    const isImageAsset = (url) => {
-        return url ? /\.(jpeg|jpg|gif|png|webp|avif)$/i.test(url) : false;
+    // Helper utility updated to detect image formats safely from an IPFS CID structure or standard URL
+    const isImageAsset = (urlOrCid) => {
+        return urlOrCid ? /\.(jpeg|jpg|gif|png|webp|avif)$/i.test(urlOrCid) : false;
     };
+
+    // Construct full file access path based on raw database url or clean IPFS content identity hash 
+    const finalAssetUrl = docData?.file_url?.startsWith('http') 
+        ? docData.file_url 
+        : `${IPFS_GATEWAY}${docData?.file_url || docData?.ipfs_cid}`;
 
     return (
         <div className="min-h-screen bg-[#F8FAFC] py-16 px-4 font-sans selection:bg-indigo-100 selection:text-indigo-900">
@@ -144,19 +152,29 @@ export default function PublicVerification() {
 
                             {/* Document Live View & Download Panel */}
                             <div className="mb-12 space-y-4">
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em]">Live Document Preview</p>
+                                <div className="flex items-center justify-between">
+                                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em]">Live Document Preview</p>
+                                    <a 
+                                        href={finalAssetUrl} 
+                                        target="_blank" 
+                                        rel="noopener noreferrer"
+                                        className="flex items-center gap-1.5 text-[9px] font-black uppercase text-indigo-600 hover:text-indigo-700 transition-colors"
+                                    >
+                                        IPFS Origin Asset <ExternalLink size={12} />
+                                    </a>
+                                </div>
                                 
                                 <div className="w-full h-120 bg-slate-50 rounded-3xl overflow-hidden border border-slate-200/60 shadow-inner relative flex items-center justify-center">
-                                    {isImageAsset(docData.file_url) ? (
+                                    {isImageAsset(finalAssetUrl) ? (
                                         <img 
-                                            src={docData.file_url} 
+                                            src={finalAssetUrl} 
                                             alt="Verified Credential Frame" 
                                             className="w-full h-full object-contain p-2 bg-white"
                                             loading="lazy"
                                         />
                                     ) : (
                                         <iframe 
-                                            src={docData.file_url} 
+                                            src={`${finalAssetUrl}#toolbar=0`} 
                                             title="Credential Content Stream" 
                                             className="w-full h-full border-none bg-white"
                                         />
@@ -164,7 +182,7 @@ export default function PublicVerification() {
                                 </div>
 
                                 <a 
-                                    href={docData.file_url} 
+                                    href={finalAssetUrl} 
                                     target="_blank" 
                                     rel="noreferrer"
                                     download={`EduTrace-Verified-Credential-${id?.substring(0, 8)}.png`}
