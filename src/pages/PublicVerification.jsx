@@ -1,6 +1,6 @@
 // src/pages/PublicVerification.jsx
 import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom'; // 👈 Added useNavigate
 import { supabase } from '../services/supabaseClient'; 
 import { ethers } from 'ethers';
 import { CONTRACT_ADDRESS, CONTRACT_ABI } from '../blockchain/config';
@@ -13,22 +13,31 @@ import {
     Building2, 
     Calendar, 
     Download,
-    Lock
+    Lock,
+    ArrowLeft // 👈 Added ArrowLeft icon
 } from 'lucide-react';
 
-// Unified decentralized IPFS gateway asset endpoint
 const IPFS_GATEWAY = "https://gateway.pinata.cloud/ipfs/";
 
 export default function PublicVerification() {
     const { id } = useParams(); 
+    const navigate = useNavigate(); // 👈 Initialize navigation hook
     const [status, setStatus] = useState('loading'); 
     const [docData, setDocData] = useState(null);
     const [blockchainData, setBlockchainData] = useState(null);
+    const [showBackButton, setShowBackButton] = useState(false); // 👈 Context tracker
 
     useEffect(() => {
+        // Check if the user came from within the app or a direct external scan
+        const dynamicHistory = window.history.state?.idx > 0;
+        const internalReferrer = document.referrer.includes(window.location.host);
+        
+        if (dynamicHistory || internalReferrer) {
+            setShowBackButton(true);
+        }
+
         const verifyDocument = async () => {
             try {
-                // 1. Fetch metadata from credentials matching the application_id
                 const { data, error } = await supabase
                     .from('credentials')
                     .select('*')
@@ -43,7 +52,6 @@ export default function PublicVerification() {
 
                 setDocData(data);
 
-                // 2. Perform On-Chain Verification
                 const provider = new ethers.JsonRpcProvider(import.meta.env.VITE_ARBITRUM_RPC);
                 const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
                 
@@ -81,12 +89,10 @@ export default function PublicVerification() {
         );
     }
 
-    // Helper utility updated to detect image formats safely from an IPFS CID structure or standard URL
     const isImageAsset = (urlOrCid) => {
         return urlOrCid ? /\.(jpeg|jpg|gif|png|webp|avif)$/i.test(urlOrCid) : false;
     };
 
-    // Construct full file access path based on raw database url or clean IPFS content identity hash 
     const finalAssetUrl = docData?.file_url?.startsWith('http') 
         ? docData.file_url 
         : `${IPFS_GATEWAY}${docData?.file_url || docData?.ipfs_cid}`;
@@ -94,6 +100,19 @@ export default function PublicVerification() {
     return (
         <div className="min-h-screen bg-[#F8FAFC] py-16 px-4 font-sans selection:bg-indigo-100 selection:text-indigo-900">
             <div className="max-w-2xl mx-auto">
+                
+                {/* Context-Dependent Back Button row */}
+                <div className="h-6 mb-4 flex items-center">
+                    {showBackButton && (
+                        <button 
+                            onClick={() => navigate(-1)}
+                            className="inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-800 transition-colors group"
+                        >
+                            <ArrowLeft size={14} className="group-hover:-translate-x-0.5 transition-transform" /> Return To Console
+                        </button>
+                    )}
+                </div>
+
                 {/* Header */}
                 <div className="text-center mb-12">
                     <div className="inline-flex items-center gap-2 bg-white px-4 py-2 rounded-2xl shadow-sm border border-slate-100 mb-6">
