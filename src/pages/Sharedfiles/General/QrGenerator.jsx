@@ -5,18 +5,18 @@ import { Download, Copy, Check, ArrowLeft, ShieldCheck, Share2 } from 'lucide-re
 
 export default function QrGenerator() {
     // Correctly extracting the parameter and aliasing to 'id'
-    const { application_id: id } = useParams(); 
+    const { credentials: application_id } = useParams(); 
     const navigate = useNavigate();
     const [copySuccess, setCopySuccess] = useState(false);
 
     // Creates the link pointing third parties straight to your PublicVerification screen
     const verificationUrl = useMemo(() => {
-        if (id) {
+        if (application_id) {
             const baseUrl = 'https://edutracetestuc.netlify.app';
-            return `${baseUrl}/verify/${id}`;
+            return `${baseUrl}/verify/${application_id}`;
         }
         return '';
-    }, [id]);
+    }, [application_id]);
 
     const handleCopy = () => {
         if (!verificationUrl) return;
@@ -47,7 +47,7 @@ export default function QrGenerator() {
             ctx.drawImage(img, 0, 0, 2000, 2000);
             
             const downloadLink = document.createElement("a");
-            downloadLink.download = `EduTrace-Seal-${id?.substring(0, 8) || 'export'}.png`;
+            downloadLink.download = `EduTrace-Seal-${application_id?.substring(0, 8) || 'export'}.png`;
             downloadLink.href = canvas.toDataURL("image/png");
             downloadLink.click();
         };
