@@ -1,18 +1,20 @@
-//src/pages/Sharedfiles/General/QrGenerator.jsx
+// src/pages/Sharedfiles/General/QrGenerator.jsx
 import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { Download, Copy, Check, ArrowLeft, ShieldCheck, Share2 } from 'lucide-react';
 
 export default function QrGenerator() {
-    const { id } = useParams(); // Public verification parameter: application_id
+    // 'id' represents the application_id passed via your React Router path definition: /verify/:id
+    const { id } = useParams(); 
     const navigate = useNavigate();
     const [copySuccess, setCopySuccess] = useState(false);
 
     // Creates the link pointing third parties straight to your PublicVerification screen
     const verificationUrl = useMemo(() => {
         if (id) {
-            const baseUrl = window.location.origin;
+            // Hardcoded to your production Netlify instance to ensure external scans never break
+            const baseUrl = 'https://edutracetestuc.netlify.app';
             return `${baseUrl}/verify/${id}`;
         }
         return '';
@@ -38,18 +40,20 @@ export default function QrGenerator() {
         const img = new Image();
         
         img.onload = () => {
+            // 2000x2000 output for crisp, high-resolution vector print scaling
             canvas.width = 2000;
             canvas.height = 2000;
             
-            // Background fill
+            // Clean white background fill
             ctx.fillStyle = "white";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
-            // Draw QR code with crisp vector scaling
+            // Render vector image onto raster canvas layout
             ctx.drawImage(img, 0, 0, 2000, 2000);
             
             const downloadLink = document.createElement("a");
-            downloadLink.download = `EduTrace-Seal-${id?.substring(0, 8)}.png`;
+            // Safely fall back to the application_id token for the filename layout
+            downloadLink.download = `EduTrace-Seal-${id?.substring(0, 8) || 'export'}.png`;
             downloadLink.href = canvas.toDataURL("image/png");
             downloadLink.click();
         };
@@ -69,6 +73,7 @@ export default function QrGenerator() {
                 </button>
 
                 <div className="bg-white p-10 rounded-[3rem] shadow-[0_32px_64px_-12px_rgba(0,0,0,0.06)] border border-slate-100 text-center relative overflow-hidden">
+                    {/* Decorative Background Element */}
                     <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50/50 rounded-bl-full -mr-16 -mt-16"></div>
 
                     <div className="flex justify-center mb-6">
@@ -87,7 +92,7 @@ export default function QrGenerator() {
                             id="qr-gen-svg"
                             value={verificationUrl} 
                             size={220} 
-                            level="H" 
+                            level="H" // High error correction tier
                             includeMargin={false}
                         />
                     </div>

@@ -1,3 +1,4 @@
+// src/pages/PublicVerification.jsx
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../services/supabaseClient'; 
@@ -25,7 +26,6 @@ export default function PublicVerification() {
         const verifyDocument = async () => {
             try {
                 // 1. Fetch metadata from Supabase
-                // FIX: Filter by 'application_id' instead of 'id' to match your schema
                 const { data, error } = await supabase
                     .from('credentials')
                     .select('*')
@@ -44,13 +44,12 @@ export default function PublicVerification() {
                 const provider = new ethers.JsonRpcProvider(import.meta.env.VITE_ARBITRUM_RPC);
                 const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
                 
-                // FIX: Use 'blockchain_hash' instead of 'file_hash'
                 const isAuthentic = await contract.verifyDocument(data.blockchain_hash);
 
                 if (isAuthentic) {
                     setBlockchainData({
-                        hash: data.blockchain_hash, // FIX: match schema
-                        tx: data.tx_hash            // FIX: match schema
+                        hash: data.blockchain_hash, 
+                        tx: data.tx_hash            
                     });
                     setStatus('verified');
                 } else {
@@ -78,6 +77,11 @@ export default function PublicVerification() {
             </div>
         );
     }
+
+    // Helper utility to detect if the storage link points to a raw rendering image asset
+    const isImageAsset = (url) => {
+        return url ? /\.(jpeg|jpg|gif|png|webp|avif)$/i.test(url) : false;
+    };
 
     return (
         <div className="min-h-screen bg-[#F8FAFC] py-16 px-4 font-sans selection:bg-indigo-100 selection:text-indigo-900">
@@ -133,22 +137,40 @@ export default function PublicVerification() {
                                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em]">Date Issued</p>
                                     <div className="flex items-center gap-3 text-slate-800 font-bold text-lg">
                                         <Calendar size={18} className="text-indigo-600" />
-                                        {/* FIX: Use 'issued_at' column instead of 'created_at' */}
                                         {docData.issued_at ? new Date(docData.issued_at).toLocaleDateString(undefined, { dateStyle: 'long' }) : 'N/A'}
                                     </div>
                                 </div>
                             </div>
 
-                            {/* File Access */}
-                            <div className="mb-12">
-                                {/* FIX: Use 'file_url' column instead of 'ipfs_url' */}
+                            {/* Document Live View & Download Panel */}
+                            <div className="mb-12 space-y-4">
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em]">Live Document Preview</p>
+                                
+                                <div className="w-full h-120 bg-slate-50 rounded-3xl overflow-hidden border border-slate-200/60 shadow-inner relative flex items-center justify-center">
+                                    {isImageAsset(docData.file_url) ? (
+                                        <img 
+                                            src={docData.file_url} 
+                                            alt="Verified Credential Frame" 
+                                            className="w-full h-full object-contain p-2 bg-white"
+                                            loading="lazy"
+                                        />
+                                    ) : (
+                                        <iframe 
+                                            src={docData.file_url} 
+                                            title="Credential Content Stream" 
+                                            className="w-full h-full border-none bg-white"
+                                        />
+                                    )}
+                                </div>
+
                                 <a 
                                     href={docData.file_url} 
                                     target="_blank" 
                                     rel="noreferrer"
-                                    className="w-full flex items-center justify-center gap-3 py-6 bg-slate-900 text-white rounded-4xl font-black uppercase text-xs tracking-[0.2em] shadow-2xl shadow-indigo-100 hover:bg-indigo-600 hover:-translate-y-1 transition-all active:scale-95"
+                                    download={`EduTrace-Verified-Credential-${id?.substring(0, 8)}.png`}
+                                    className="w-full flex items-center justify-center gap-3 py-5 bg-slate-900 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-slate-200 hover:bg-indigo-600 hover:-translate-y-0.5 transition-all active:scale-95"
                                 >
-                                    <Download size={20} /> View Original Document
+                                    <Download size={16} /> Download File Copy
                                 </a>
                             </div>
 
