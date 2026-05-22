@@ -11,20 +11,25 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    const body = await req.json()
-    const { applicationId, recipientUuid, issuerId, cid, studentName, documentType, schoolId } = body
+    const { applicationId, recipientUuid, cid, issuerId, studentName, documentType, schoolId } = await req.json()
 
-    // Initialize Provider and Wallet
+    // 1. Setup Provider/Wallet
     const provider = new ethers.JsonRpcProvider(Deno.env.get('ARB_RPC_URL'))
     const wallet = new ethers.Wallet(Deno.env.get('MASTER_WALLET_PRIVATE_KEY')!, provider)
+    
+    // 2. The contract expects an 'address'
+    // We use the wallet address as the owner of this record on the ledger
     const contractAddr = Deno.env.get('CONTRACT_ADDRESS')!
-    const ABI = ["function issueCredential(address recipient, string memory cid) public returns (uint256)"]
+    const ABI = ["function issueCredential(address recipient, string memory cid) public returns (bytes32)"]
     const contract = new ethers.Contract(contractAddr, ABI, wallet)
 
-    // Execute Transaction
+    // 3. Execute Transaction 
+    // We pass the MASTER wallet address as the recipient (or you can use the student's 
+    // public address if you store it in your DB)
     const tx = await contract.issueCredential(wallet.address, cid)
     const receipt = await tx.wait()
 
+    // 4. Update Database
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -38,7 +43,7 @@ serve(async (req) => {
       school_id: schoolId,
       document_type: documentType,
       tx_hash: receipt.hash,
-      blockchain_hash: receipt.hash,
+      blockchain_hash: receipt.logs[0].topics[1], // Directly extracting the indexed fileHash topic from logs
       file_url: `https://gateway.pinata.cloud/ipfs/${cid}`,
       ipfs_cid: cid,
       status: 'Issued'
@@ -46,18 +51,17 @@ serve(async (req) => {
 
     if (dbError) throw dbError
 
-    return new Response(JSON.stringify({ success: true, hash: receipt.hash }), {
+    await supabase.from('student_applications').update({ status: 'Issued' }).eq('application_id', applicationId)
+
+    return new Response(JSON.stringify({ success: true, txHash: receipt.hash }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 200,
     })
-    
-    const {error: updateError} = await supabase.from('student_applications') update({status:'Issued'}).eq('application_id', applicationId)
-    if(updateError) throw updateError
-
   } catch (error) {
+    console.error("MINTING ERROR:", error)
     return new Response(JSON.stringify({ error: error.message }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 400,
+      status: 500,
     })
   }
 })

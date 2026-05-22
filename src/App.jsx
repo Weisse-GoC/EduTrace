@@ -8,11 +8,10 @@ import StudentLayout from "./layouts/StudentLayout";
 import StaffLayout from "./layouts/StaffLayout"; 
 import HeadLayout from "./layouts/HeadLayout";
 
-
 // --- 1. PUBLIC & THIRD-PARTY (No Login Required) ---
 import LandingPage from "./pages/Sharedfiles/General/LandingPage.jsx"; 
 import Login from "./pages/Sharedfiles/General/Login.jsx"; 
-import PublicVerification from "./pages/PublicVerification"; // For the Third-Party Verifier
+import PublicVerification from "./pages/PublicVerification"; 
 
 // --- 2. SHARED UTILITIES ---
 import NotificationPage from "./pages/Sharedfiles/General/NotificationPage.jsx"; 
@@ -38,11 +37,9 @@ import LogActivity from "./pages/Sharedfiles/StaffFiles/LogActivity.jsx";
 import HeadDashboard from "./pages/HeadPage/HeadDashboard"; 
 import MintingConsole from "./pages/HeadPage/MintingConsole";
 import VerificationResult from "./pages/HeadPage/VerificationResult.jsx"; 
-// import SignatureUpload from "./pages/HeadPage/SignatureUpload.jsx";
 
-// --- 6. ADMIN (The User Creator / Profile Generator) ---
+// --- 6. ADMIN ---
 import AdminDashboard from "./pages/ProfileGenerator/Admin.jsx"; 
-import { Signature } from "ethers";
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -61,7 +58,6 @@ export default function App() {
           {/* --- PUBLIC GROUP --- */}
           <Route path="/" element={<LandingPage />} /> 
           <Route path="/auth" element={<Login />} /> 
-          {/* This is the entry point for the 3rd party verifier via QR scan */}
           <Route path="/verify/:id" element={<PublicVerification />} />
 
           {/* --- STUDENT PORTAL --- */}
@@ -79,7 +75,7 @@ export default function App() {
             <Route path="qr-generate/:application_id" element={<QrGenerator />} /> 
             <Route path="profile" element={<StudentProfile />} />
             <Route path="credential/:credentialId" element={<ViewCredential />} />
-            <Route path="history" element={<ActivityHistory />} /> 
+            {/* Removed ActivityHistory from Student */}
             <Route path="notifications" element={<NotificationPage />} />
             <Route path="settings" element={<Settings />} />
           </Route>
@@ -97,11 +93,10 @@ export default function App() {
             <Route path="dashboard" element={<StaffDashboard />} />
             <Route path="verify" element={<Verify />} /> 
             <Route path="lookup" element={<LookUp />} />
-            <Route path="logs" element={<LogActivity />} /> 
+            {/* LogActivity removed from Staff */}
             <Route path="history" element={<ActivityHistory />} />
             <Route path="profile" element={<StaffProfile />} /> 
             <Route path="settings" element={<Settings />} />
-            {/* Dynamic doc view for verification details */}
             <Route path="verify/:docId" element={<VerificationResult />} />
           </Route>
 
@@ -119,10 +114,9 @@ export default function App() {
             <Route path="mint/:docId" element={<MintingConsole />} />
             <Route path="logs" element={<LogActivity />} /> 
             <Route path="settings" element={<Settings />} />
-            {/* <Route path="signatureupload" element={<SignatureUpload />} /> */}
           </Route>
 
-          {/* --- ADMIN PORTAL (The Isolated Creator) --- */}
+          {/* --- ADMIN PORTAL --- */}
           <Route
             path="/admin"
             element={
@@ -135,13 +129,11 @@ export default function App() {
             path="/admin/dashboard"
             element={
               <ProtectedRoute requiredRole="admin">
-                {/* Note: Admin doesn't use a Sidebar layout to keep it distinct from office staff */}
                 <AdminDashboard />
               </ProtectedRoute>
             }
           />
           
-          {/* CATCH-ALL REDIRECT */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>

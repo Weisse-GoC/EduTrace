@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { supabase } from '../../services/supabaseClient'; 
-import { logActivity } from '../../utils/logActivity';
 import { useAuth } from '../../hooks/useAuth';
 import { 
     Search, Loader2, AlertCircle, Users, 
@@ -126,7 +125,6 @@ export default function StaffDashboard() {
 
             let ipfsCid = null;
 
-            // 1. IPFS Upload logic
             if (newStatus === 'Verified' && selectedFile) {
                 const formData = new FormData();
                 formData.append('file', selectedFile);
@@ -144,7 +142,7 @@ export default function StaffDashboard() {
 
             const timestamp = new Date().toISOString();
 
-            // 2. Update Application Status
+            // Perform Update
             const { error: appError } = await supabase
                 .from('student_applications')
                 .update({ 
@@ -156,12 +154,12 @@ export default function StaffDashboard() {
 
             if (appError) throw appError;
 
-            // 3. Create Credential Record (FIXED: Added application_id to prevent 23503 Conflict)
+            // Create Credential Record
             if (newStatus === 'Verified' && ipfsCid) {
                 const { error: credError } = await supabase
                     .from('credentials')
                     .insert([{
-                        application_id: applicationId, // CRITICAL FIX
+                        application_id: applicationId,
                         issuer_id: profile.id,
                         recipient_id: studentAuthId,
                         student_name: studentName,
@@ -175,19 +173,13 @@ export default function StaffDashboard() {
                 if (credError) throw credError;
             }
 
-            // 4. Update UI State Locally
             setRequests(prev => prev.map(req => 
                 req.application_id === applicationId ? { ...req, status: newStatus, ipfs_cid: ipfsCid, completed_at: timestamp } : req
             ));
             setExpandedId(null);
 
-            await logActivity({
-                userId: profile.id,
-                action: `VERIFIED_DOC_UPLOADED`,
-                targetStudentId: studentId,
-                targetStudentName: studentName,
-                details: { ipfs_cid: ipfsCid, docType: targetReq.document_type }
-            });
+            // LogActivity is removed because ActivityHistory.jsx 
+            // now tracks changes via real-time subscription to 'student_applications'
 
         } catch (error) {
             console.error("FLOW FAILED:", error);
