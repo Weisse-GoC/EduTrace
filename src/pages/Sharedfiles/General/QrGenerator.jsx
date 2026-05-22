@@ -5,7 +5,7 @@ import { Download, Copy, Check, ArrowLeft, ShieldCheck, Share2 } from 'lucide-re
 
 export default function QrGenerator() {
     // Correctly extracting the parameter and aliasing to 'id'
-    const { credentials: application_id } = useParams(); 
+    const { application_id } = useParams(); 
     const navigate = useNavigate();
     const [copySuccess, setCopySuccess] = useState(false);
 
