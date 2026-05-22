@@ -1,19 +1,17 @@
-// src/pages/Sharedfiles/General/QrGenerator.jsx
 import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { Download, Copy, Check, ArrowLeft, ShieldCheck, Share2 } from 'lucide-react';
 
 export default function QrGenerator() {
-    // 'id' represents the application_id passed via your React Router path definition: /verify/:id
-    const { id } = useParams(); 
+    // Correctly extracting the parameter and aliasing to 'id'
+    const { application_id: id } = useParams(); 
     const navigate = useNavigate();
     const [copySuccess, setCopySuccess] = useState(false);
 
     // Creates the link pointing third parties straight to your PublicVerification screen
     const verificationUrl = useMemo(() => {
         if (id) {
-            // Hardcoded to your production Netlify instance to ensure external scans never break
             const baseUrl = 'https://edutracetestuc.netlify.app';
             return `${baseUrl}/verify/${id}`;
         }
@@ -40,19 +38,15 @@ export default function QrGenerator() {
         const img = new Image();
         
         img.onload = () => {
-            // 2000x2000 output for crisp, high-resolution vector print scaling
             canvas.width = 2000;
             canvas.height = 2000;
             
-            // Clean white background fill
             ctx.fillStyle = "white";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
-            // Render vector image onto raster canvas layout
             ctx.drawImage(img, 0, 0, 2000, 2000);
             
             const downloadLink = document.createElement("a");
-            // Safely fall back to the application_id token for the filename layout
             downloadLink.download = `EduTrace-Seal-${id?.substring(0, 8) || 'export'}.png`;
             downloadLink.href = canvas.toDataURL("image/png");
             downloadLink.click();
@@ -92,7 +86,7 @@ export default function QrGenerator() {
                             id="qr-gen-svg"
                             value={verificationUrl} 
                             size={220} 
-                            level="H" // High error correction tier
+                            level="H" 
                             includeMargin={false}
                         />
                     </div>
