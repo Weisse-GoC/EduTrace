@@ -69,7 +69,8 @@ export default function StaffLayout() {
     const navLinks = [
         { to: '/staff/dashboard', icon: LayoutDashboard, label: 'Overview' },
         { to: '/staff/lookup', icon: Search, label: 'Student Lookup' },
-        { to: '/staff/logs', icon: Activity, label: 'Audit Logs' },
+        // UPDATE THIS LINE:
+        { to: '/staff/history', icon: Activity, label: 'Audit Logs' }, 
         { to: '/staff/settings', icon: Settings, label: 'Settings' },
     ];
 
