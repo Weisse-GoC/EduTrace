@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../services/supabaseClient';
-import { FileText, Send, CheckCircle2, Loader2, ArrowLeft, Printer } from 'lucide-react';
+import { FileText, Send, CheckCircle2, Loader2, ArrowLeft, Printer, ChevronDown, ChevronUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -13,10 +13,27 @@ export default function ApplicationPortal() {
     const [formType, setFormType] = useState(null); // 'RECORDS' (Form 01) or 'DIPLOMA' (Form 02)
     const [loading, setLoading] = useState(false);
     const [claimData, setClaimData] = useState(null);
+    const [isCertOpen, setIsCertOpen] = useState(false); // Controls sub-dropdown visibility
+
+    // Certification Sub-Options Checklist
+    const certOptions = [
+        "Attendance",
+        "Completion Cert",
+        "Completion with Pending ROG",
+        "English as Medium of Instruction",
+        "Enrollment",
+        "Grading System",
+        "Graduation",
+        "GWA",
+        "Lacking Units",
+        "NSTP Serial Number",
+        "QATAR CERTIFICATE",
+        "Units Earned"
+    ];
 
     // Form State
     const [formData, setFormData] = useState({
-        documentType: '',
+        documentType: '', // Tracks primary selections
         purpose: '',
         mobileNumber: '',
         civilStatus: 'Single',
@@ -24,6 +41,9 @@ export default function ApplicationPortal() {
         yearGraduated: '',
         degreeTitle: '', 
     });
+
+    // Sub-items selected under Certification
+    const [selectedCerts, setSelectedCerts] = useState([]);
 
     // Sync profile data when it loads
     useEffect(() => {
@@ -35,17 +55,46 @@ export default function ApplicationPortal() {
         }
     }, [profile]);
 
+    // Checkbox Action Handlers
+    const handleCheckItem = (certName) => {
+        if (selectedCerts.includes(certName)) {
+            setSelectedCerts(selectedCerts.filter(item => item !== certName));
+        } else {
+            setSelectedCerts([...selectedCerts, certName]);
+        }
+    };
+
+    const handleSelectAll = (checked) => {
+        if (checked) {
+            setSelectedCerts(certOptions);
+        } else {
+            setSelectedCerts([]);
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!user || !profile) return;
+
+        // Custom validation check if Certification is selected
+        if (formType === 'RECORDS' && formData.documentType === 'Certification' && selectedCerts.length === 0) {
+            alert("Please select at least one document under the Certification options.");
+            return;
+        }
+
         setLoading(true);
 
         try {
             const schoolId = profile?.sharedId;
             const fullName = profile?.fullName;
             
-            // Logic to ensure document_type is never empty
-            const finalDocType = formType === 'DIPLOMA' ? 'DIPLOMA' : formData.documentType;
+            // --- BACKEND COMPILATION LOGIC ---
+            let finalDocType = formData.documentType;
+            if (formType === 'DIPLOMA') {
+                finalDocType = 'DIPLOMA';
+            } else if (formData.documentType === 'Certification') {
+                finalDocType = `Certification: ${selectedCerts.join(', ')}`;
+            }
 
             const { error } = await supabase
                 .from('student_applications')
@@ -198,11 +247,69 @@ export default function ApplicationPortal() {
                     <div className="space-y-6">
                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Select Document Type</label>
                         <div className="grid grid-cols-2 gap-3">
-                            {['Transcript of Records', 'Transfer Credential', 'Certification', 'Authentication'].map(doc => (
-                                <div key={doc} onClick={() => setFormData({...formData, documentType: doc})} className={`p-4 border-2 rounded-2xl cursor-pointer font-black text-[10px] uppercase transition-all ${formData.documentType === doc ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-100 text-slate-400'}`}>
-                                    {doc}
-                                </div>
-                            ))}
+                            {[
+                                'Transcript of Records', 
+                                'Transfer Credential', 
+                                'Certification', 
+                                'Authentication', 
+                                'True copy of Grades'
+                            ].map(doc => {
+                                const isCert = doc === 'Certification';
+                                const isSelected = formData.documentType === doc;
+                                
+                                return (
+                                    <div key={doc} className={`w-full flex flex-col gap-2 ${doc === 'True copy of Grades' ? 'col-span-2' : ''}`}>
+                                        <div 
+                                            onClick={() => {
+                                                setFormData({...formData, documentType: doc});
+                                                if (isCert) setIsCertOpen(!isCertOpen);
+                                                else setIsCertOpen(false);
+                                            }} 
+                                            className={`p-4 border-2 rounded-2xl cursor-pointer font-black text-[10px] uppercase transition-all flex justify-between items-center ${isSelected ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-100 text-slate-400'}`}
+                                        >
+                                            <span>{doc}</span>
+                                            {isCert && (isCertOpen ? <ChevronUp size={14}/> : <ChevronDown size={14}/>)}
+                                        </div>
+
+                                        {/* Dynamic Dropdown Checklist for Certification */}
+                                        {isCert && isCertOpen && (
+                                            <div className="mt-2 p-5 bg-slate-50 border border-slate-200 rounded-2xl space-y-4 max-h-72 overflow-y-auto text-left">
+                                                {/* Select All Checkbox row */}
+                                                <div className="flex items-center gap-3 pb-3 border-b border-slate-200">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        id="select-all" 
+                                                        className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                                        checked={selectedCerts.length === certOptions.length}
+                                                        onChange={(e) => handleSelectAll(e.target.checked)}
+                                                    />
+                                                    <label htmlFor="select-all" className="text-[10px] font-black uppercase text-indigo-600 cursor-pointer">
+                                                        Select All Documents
+                                                    </label>
+                                                </div>
+
+                                                {/* Individual options checklists */}
+                                                <div className="grid grid-cols-1 gap-3">
+                                                    {certOptions.map(name => (
+                                                        <div key={name} className="flex items-center gap-3">
+                                                            <input 
+                                                                type="checkbox" 
+                                                                id={`cert-${name}`}
+                                                                className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                                                checked={selectedCerts.includes(name)}
+                                                                onChange={() => handleCheckItem(name)}
+                                                            />
+                                                            <label htmlFor={`cert-${name}`} className="text-[10px] font-bold uppercase text-slate-700 cursor-pointer select-none">
+                                                                {name}
+                                                            </label>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
                         </div>
                         <input type="text" placeholder="Purpose (e.g., Employment, Board Exam)" className="w-full p-5 bg-slate-900 text-white rounded-3xl font-bold outline-none" value={formData.purpose} onChange={(e) => setFormData({...formData, purpose: e.target.value})} required />
                     </div>

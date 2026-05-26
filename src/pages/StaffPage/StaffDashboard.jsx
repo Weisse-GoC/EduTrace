@@ -113,7 +113,20 @@ export default function StaffDashboard() {
         }
     };
 
-    const handleUpdateStatus = async (applicationId, newStatus, studentName, studentId, studentAuthId, selectedFile = null) => {
+    // Helper to parse multi-document strings
+    const getRequiredDocsList = (docTypeString) => {
+        if (!docTypeString) return ["Document"];
+        if (docTypeString.toUpperCase().includes("CERTIFICATION:")) {
+            const parts = docTypeString.split(/:/i);
+            if (parts[1]) {
+                return parts[1].split(",").map(item => item.trim()).filter(Boolean);
+            }
+        }
+        return [docTypeString];
+    };
+
+    // UPGRADED: Handles filesMap object instead of a single selectedFile
+    const handleUpdateStatus = async (applicationId, newStatus, studentName, studentId, studentAuthId, filesMap = {}) => {
         if (!profile) return;
         
         try {
@@ -125,24 +138,42 @@ export default function StaffDashboard() {
 
             let ipfsCid = null;
 
-            if (newStatus === 'Verified' && selectedFile) {
-                const formData = new FormData();
-                formData.append('file', selectedFile);
+            if (newStatus === 'Verified' && Object.keys(filesMap).length > 0) {
+                const requiredDocs = getRequiredDocsList(targetReq.document_type);
+                
+                // Upload all documents concurrently
+                const uploadPromises = requiredDocs.map(async (docName) => {
+                    const targetFile = filesMap[docName];
+                    if (!targetFile) throw new Error(`Missing attachment for: ${docName}`);
 
-                const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ipfs-upload`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-                    body: formData
+                    const formData = new FormData();
+                    formData.append('file', targetFile);
+
+                    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ipfs-upload`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+                        body: formData
+                    });
+
+                    const result = await response.json();
+                    if (!result.success) throw new Error(result.error || `IPFS processing failure on ${docName}`);
+                    
+                    return { docName, cid: result.cid };
                 });
 
-                const result = await response.json();
-                if (!result.success) throw new Error(result.error || "IPFS Upload Failed");
-                ipfsCid = result.cid;
+                const uploadResults = await Promise.all(uploadPromises);
+
+                // Build mapping string or clean single hash string
+                if (uploadResults.length === 1) {
+                    ipfsCid = uploadResults[0].cid;
+                } else {
+                    ipfsCid = uploadResults.map(res => `${res.docName}:${res.cid}`).join(' || ');
+                }
             }
 
             const timestamp = new Date().toISOString();
 
-            // Perform Update
+            // Perform Database Synchronization
             const { error: appError } = await supabase
                 .from('student_applications')
                 .update({ 
@@ -154,7 +185,7 @@ export default function StaffDashboard() {
 
             if (appError) throw appError;
 
-            // Create Credential Record
+            // Create Decentralized Credential Log Entry
             if (newStatus === 'Verified' && ipfsCid) {
                 const { error: credError } = await supabase
                     .from('credentials')
@@ -177,9 +208,6 @@ export default function StaffDashboard() {
                 req.application_id === applicationId ? { ...req, status: newStatus, ipfs_cid: ipfsCid, completed_at: timestamp } : req
             ));
             setExpandedId(null);
-
-            // LogActivity is removed because ActivityHistory.jsx 
-            // now tracks changes via real-time subscription to 'student_applications'
 
         } catch (error) {
             console.error("FLOW FAILED:", error);
@@ -214,7 +242,7 @@ export default function StaffDashboard() {
                     <div className="bg-white p-12 rounded-[3rem] shadow-2xl flex flex-col items-center text-center max-w-sm">
                         <Loader2 className="w-16 h-16 text-indigo-600 animate-spin mb-6" />
                         <h2 className="text-2xl font-black uppercase italic tracking-tighter mb-2 text-slate-900">Uploading to IPFS</h2>
-                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest leading-relaxed">Securing certificate on the decentralized web. Do not refresh.</p>
+                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest leading-relaxed">Securing certificates on the decentralized web. Do not refresh.</p>
                     </div>
                 </div>
             )}
@@ -299,6 +327,7 @@ export default function StaffDashboard() {
     );
 }
 
+// Retained inline sub-components safely
 function StatCard({ icon, label, value, color }) {
     const colors = {
         indigo: "bg-indigo-600 shadow-indigo-100",
