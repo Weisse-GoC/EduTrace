@@ -82,7 +82,7 @@ export default function ThirdPartyPortal() {
 
                     {error && (
                         <div className="flex items-center text-rose-400 text-sm bg-rose-400/10 p-3 rounded-lg">
-                            <AlertCircle className="w-4 h-4 mr-2 flex-shrink-0" />
+                            <AlertCircle className="w-4 h-4 mr-2 shrink-0" />
                             {error}
                         </div>
                     )}

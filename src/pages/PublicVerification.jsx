@@ -275,7 +275,7 @@ export default function PublicVerification() {
                             <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-bl-full pointer-events-none"></div>
                             
                             <div className="flex flex-col items-center text-center mb-10 border-b border-slate-800/60 pb-8">
-                                <div className="w-16 h-16 bg-emerald-950/40 border border-emerald-500/40 rounded-2xl flex items-center justify-center text-emerald-400 mb-4 shadow-[0_0_20px_rgba(16,185,129,0.15)] shadow-inner">
+                                <div className="w-16 h-16 bg-emerald-950/40 border border-emerald-500/40 rounded-2xl flex items-center justify-center text-emerald-400 mb-4 shadow-[0_0_20px_rgba(16,185,129,0.15)]">
                                     <ShieldCheck size={36} strokeWidth={2} />
                                 </div>
                                 <h2 className="text-2xl font-black text-white uppercase tracking-wider">INTEGRITY_PASSED</h2>
