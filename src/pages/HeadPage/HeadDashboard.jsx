@@ -2,26 +2,29 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../services/supabaseClient';
 import { fetchHeadDashboardData } from '../../services/headDashboardService';
-// 1. ADD useAuth to imports
 import { useAuth } from '../../hooks/useAuth'; 
+import SignatureUpload from './SignatureUpload'; 
+
 import {
     Loader2, UserCheck, Award,
     AlertCircle, LayoutDashboard,
     Activity, Fingerprint, Database, Zap,
-    LogOut // 2. Add LogOut icon
+    LogOut, X, PenTool 
 } from 'lucide-react';
 
 export default function HeadDashboard() {
     const navigate = useNavigate();
-    // 3. GRAB logout from useAuth
     const { logout } = useAuth(); 
     const [pendingApplications, setPendingApplications] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isLive, setIsLive] = useState(false);
     const [stats, setStats] = useState({ pending: 0, issued: 0, processing: 0, failed: 0 });
+    
+    // 🔒 Added State to check if the Head has a signature on file
+    const [headData, setHeadData] = useState(null);
+    const [showSignatureModal, setShowSignatureModal] = useState(false);
+    
     const isMounted = useRef(true);
-
-    // ... (fetchDashboardData and useEffect logic remain the same) ...
 
     const fetchDashboardData = useCallback(async (silent = false) => {
         if (!silent && isMounted.current) {
@@ -31,9 +34,22 @@ export default function HeadDashboard() {
         try {
             const { pendingApplications, stats } = await fetchHeadDashboardData();
 
+            // Fetch current Head's signature status to enforce the minting lock
+            const { data: { user } } = await supabase.auth.getUser();
+            let staffProfile = null;
+            if (user) {
+                const { data } = await supabase
+                    .from('staff_records') // ⚠️ Double check this matches your actual table name
+                    .select('signature_url')
+                    .eq('id', user.id)
+                    .single();
+                staffProfile = data;
+            }
+
             if (isMounted.current) {
                 setPendingApplications(pendingApplications);
                 setStats(stats);
+                setHeadData(staffProfile);
             }
         } catch (err) {
             console.error("Dashboard Fetch Error:", err);
@@ -85,9 +101,41 @@ export default function HeadDashboard() {
         };
     }, [fetchDashboardData]);
 
+    // Calculate if the system should be locked
+    const isSignatureMissing = !headData?.signature_url;
+
+    // Helper function for the main action button
+    const handleMintAction = (appId) => {
+        if (isSignatureMissing) {
+            setShowSignatureModal(true); // Pop the modal if they try to mint without a signature
+        } else {
+            navigate(`/head/mint/${appId}`);
+        }
+    };
+
     return (
         <div className="min-h-screen bg-[#F8FAFC]">
-            {/* 4. ADDED HEADER BAR FOR LOGOUT */}
+            
+            {/* SIGNATURE UPLOAD MODAL OVERLAY */}
+            {showSignatureModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+                    <div className="relative w-full max-w-md animate-in fade-in zoom-in-95 duration-200">
+                        <button 
+                            onClick={() => {
+                                setShowSignatureModal(false);
+                                fetchDashboardData(true); // Refresh silently when modal closes to check for new signature
+                            }}
+                            className="absolute -top-12 right-0 flex items-center gap-2 text-white hover:text-rose-400 transition-colors"
+                        >
+                            <span className="text-xs font-bold uppercase tracking-widest">Close</span>
+                            <div className="bg-white/10 p-1 rounded-full"><X size={16} /></div>
+                        </button>
+                        
+                        <SignatureUpload />
+                    </div>
+                </div>
+            )}
+
             <nav className="max-w-7xl mx-auto px-8 lg:px-12 py-6 flex justify-between items-center">
                 <div className="flex items-center gap-2">
                     <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-xs">ET</div>
@@ -104,7 +152,7 @@ export default function HeadDashboard() {
             <main className="max-w-7xl mx-auto p-8 lg:p-12 pt-0">
                 
                 {/* Authority Status Banner */}
-                <div className="mb-10 flex items-center justify-between p-6 bg-white border-l-4 border-emerald-500 rounded-3xl shadow-xl shadow-slate-100">
+                <div className="mb-10 flex flex-col md:flex-row md:items-center justify-between p-6 bg-white border-l-4 border-emerald-500 rounded-3xl shadow-xl shadow-slate-100 gap-4">
                     <div className="flex items-center gap-5">
                         <div className="bg-emerald-100 p-3 rounded-2xl text-emerald-600">
                             <UserCheck size={24} />
@@ -114,13 +162,27 @@ export default function HeadDashboard() {
                             <p className="text-slate-500 text-sm font-medium">Head Registrar session is authenticated. Arbitrum L2 node connection established.</p>
                         </div>
                     </div>
-                    <div className="flex items-center gap-3 px-4 py-2 bg-slate-50 rounded-xl border border-slate-100">
-                        <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-                        <span className="text-[10px] font-black uppercase text-slate-400">Signature Verified</span>
-                    </div>
+                    
+                    {/* MANAGE SIGNATURE BUTTON */}
+                    <button 
+                        onClick={() => setShowSignatureModal(true)}
+                        className={`group flex items-center gap-3 px-4 py-3 md:py-2 rounded-xl border transition-all cursor-pointer ${
+                            isSignatureMissing 
+                                ? 'bg-rose-50 border-rose-200 hover:bg-rose-100' 
+                                : 'bg-slate-50 border-slate-200 hover:border-indigo-200 hover:bg-indigo-50'
+                        }`}
+                    >
+                        <div className={`w-2 h-2 rounded-full animate-pulse ${isSignatureMissing ? 'bg-rose-500' : 'bg-emerald-500 group-hover:bg-indigo-500'}`} />
+                        <span className={`text-[10px] font-black uppercase tracking-widest transition-colors ${
+                            isSignatureMissing ? 'text-rose-600' : 'text-slate-500 group-hover:text-indigo-600'
+                        }`}>
+                            {isSignatureMissing ? 'Upload Signature Now' : 'Manage Signature'}
+                        </span>
+                        <PenTool size={14} className={isSignatureMissing ? 'text-rose-500' : 'text-slate-400 group-hover:text-indigo-500'} />
+                    </button>
                 </div>
 
-                {/* ... (Rest of the stats and queue cards remain the same) ... */}
+                {/* Queue Stats Row */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-16">
                     <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
                         <div className="flex justify-between items-start mb-4">
@@ -213,14 +275,22 @@ export default function HeadDashboard() {
 
                                 <div className="p-6 md:pr-10">
                                     <button 
-                                        onClick={() => navigate(`/head/mint/${app.application_id}`)}
-                                        className="relative overflow-hidden px-10 py-5 bg-slate-900 rounded-4xl group/btn shadow-xl shadow-slate-200 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
+                                        onClick={() => handleMintAction(app.application_id)}
+                                        className={`relative overflow-hidden px-10 py-5 rounded-4xl group/btn transition-all active:scale-95 ${
+                                            isSignatureMissing 
+                                                ? 'bg-rose-50 text-rose-500 border border-rose-200 hover:bg-rose-100 hover:border-rose-300' 
+                                                : 'bg-slate-900 text-white shadow-xl shadow-slate-200 hover:scale-105'
+                                        }`}
                                     >
-                                        <div className="relative z-10 flex items-center gap-3 text-white">
-                                            <Zap size={18} />
-                                            <span className="text-[10px] font-black uppercase tracking-widest">Issue and Approve</span>
+                                        <div className="relative z-10 flex items-center gap-3">
+                                            {isSignatureMissing ? <AlertCircle size={18} /> : <Zap size={18} />}
+                                            <span className="text-[10px] font-black uppercase tracking-widest">
+                                                {isSignatureMissing ? 'Signature Required' : 'Issue and Approve'}
+                                            </span>
                                         </div>
-                                        <div className="absolute inset-0 bg-indigo-600 translate-y-full group-hover/btn:translate-y-0 transition-transform duration-300" />
+                                        {!isSignatureMissing && (
+                                            <div className="absolute inset-0 bg-indigo-600 translate-y-full group-hover/btn:translate-y-0 transition-transform duration-300" />
+                                        )}
                                     </button>
                                 </div>
                             </div>

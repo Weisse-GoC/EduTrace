@@ -12,6 +12,8 @@ import HeadLayout from "./layouts/HeadLayout";
 import LandingPage from "./pages/Sharedfiles/General/LandingPage.jsx"; 
 import Login from "./pages/Sharedfiles/General/Login.jsx"; 
 import PublicVerification from "./pages/PublicVerification"; 
+// ADDED: Third Party Portal Import
+import ThirdPartyPortal from "./pages/ThirdPartyPortal.jsx"; 
 
 // --- 2. SHARED UTILITIES ---
 import NotificationPage from "./pages/Sharedfiles/General/NotificationPage.jsx"; 
@@ -58,6 +60,8 @@ export default function App() {
           {/* --- PUBLIC GROUP --- */}
           <Route path="/" element={<LandingPage />} /> 
           <Route path="/auth" element={<Login />} /> 
+          {/* ADDED: Third Party Portal Route */}
+          <Route path="/verify-portal" element={<ThirdPartyPortal />} />
           <Route path="/verify/:id" element={<PublicVerification />} />
 
           {/* --- STUDENT PORTAL --- */}
@@ -75,7 +79,6 @@ export default function App() {
             <Route path="qr-generate/:application_id" element={<QrGenerator />} /> 
             <Route path="profile" element={<StudentProfile />} />
             <Route path="credential/:credentialId" element={<ViewCredential />} />
-            {/* Removed ActivityHistory from Student */}
             <Route path="notifications" element={<NotificationPage />} />
             <Route path="settings" element={<Settings />} />
           </Route>
@@ -93,7 +96,6 @@ export default function App() {
             <Route path="dashboard" element={<StaffDashboard />} />
             <Route path="verify" element={<Verify />} /> 
             <Route path="lookup" element={<LookUp />} />
-            {/* LogActivity removed from Staff */}
             <Route path="history" element={<ActivityHistory />} />
             <Route path="profile" element={<StaffProfile />} /> 
             <Route path="settings" element={<Settings />} />
