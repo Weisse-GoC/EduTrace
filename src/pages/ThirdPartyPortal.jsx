@@ -23,6 +23,15 @@ export default function ThirdPartyPortal() {
             if (input.startsWith('http://') || input.startsWith('https://')) {
                 const url = new URL(input);
                 
+                // ── DOMAIN VALIDATION CHECK ──────────────────────────────────────
+                // Ensure the link actually belongs to your Netlify portal or your local stack
+                const allowedHosts = ['edutracetestuc.netlify.app', 'localhost'];
+                if (!allowedHosts.includes(url.hostname)) {
+                    // Redirect to your app's catch-all 404 route if an unrelated domain is pasted
+                    navigate('/404');
+                    return;
+                }
+                
                 // Try query params first
                 extractedId = url.searchParams.get('cid') || url.searchParams.get('id');
                 
@@ -44,7 +53,8 @@ export default function ThirdPartyPortal() {
             }
 
         } catch (err) {
-            setError("Could not parse that link. Please check the format and try again.");
+            // Catches fundamentally malformed URLs (e.g., https://http://invalid-string)
+            navigate('/404');
         }
     };
 
