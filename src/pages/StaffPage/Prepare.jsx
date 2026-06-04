@@ -1,328 +1,522 @@
 // src/pages/StaffPage/Prepare.jsx
-import { useState, useEffect } from 'react';
-import { supabase } from '../../services/supabaseClient';
+import { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { supabase } from '../../services/supabaseClient'; 
+import { useAuth } from '../../hooks/useAuth';
 import { 
-    FileSearch, CheckCircle2, Send, Loader2, Upload, FileCheck, AlertCircle, FileText, Minimize2, ShieldCheck
+  Loader2, 
+  Zap, 
+  AlertCircle, 
+  FileText, 
+  ExternalLink, 
+  ChevronDown, 
+  CheckCircle, 
+  UploadCloud, 
+  RefreshCw 
 } from 'lucide-react';
 
-export default function StaffPrepare() {
-    const [queue, setQueue] = useState([]);
+const IPFS_GATEWAY = "https://gateway.pinata.cloud/ipfs/";
+
+const parseCustomIpfsBundle = (ipfsCid) => {
+    if (!ipfsCid) return [];
+    const rawItems = String(ipfsCid).split('||');
+    return rawItems.map(item => {
+        const cleanItem = item.trim();
+        const colonIndex = cleanItem.indexOf(':');
+        if (colonIndex !== -1) {
+            const name = cleanItem.substring(0, colonIndex).trim();
+            const cid = cleanItem.substring(colonIndex + 1).trim();
+            if (name && cid) return { name, cid };
+        }
+        return { name: "L1 Verifiable Document Asset", cid: cleanItem };
+    }).filter(doc => doc.cid.length > 0);
+};
+
+export default function StaffIssuanceConsole() {
+    const { docId } = useParams(); 
+    const navigate = useNavigate();
+    const { profile } = useAuth();
+    
+    const [appData, setAppData] = useState(null);
+    const [documents, setDocuments] = useState([]); 
+    const [activeDocName, setActiveDocName] = useState(null); 
+    
+    const [selectedFiles, setSelectedFiles] = useState([]);
+    const [isUploading, setIsUploading] = useState(false);
+    const [uploadedCidString, setUploadedCidString] = useState(''); 
+
+    const [decryptedUrls, setDecryptedUrls] = useState({});
+    const [isDecrypting, setIsDecrypting] = useState(false);
+    
+    const urlsRef = useRef({});
+    const fileInputRef = useRef(null); 
+
     const [loading, setLoading] = useState(true);
-    const [submittingId, setSubmittingId] = useState(null);
-    const [selectedFiles, setSelectedFiles] = useState({}); // { [requestId]: { [docName]: File } }
-    const [error, setError] = useState("");
+    const [isMinting, setIsMinting] = useState(false);
+    const [mintingStep, setMintingStep] = useState('');
 
-    useEffect(() => { 
-        fetchVerifiedQueue(); 
-    }, []);
+    const handleFileChange = (e) => {
+        if (e.target.files) {
+            setSelectedFiles(Array.from(e.target.files));
+        }
+    };
 
-    const fetchVerifiedQueue = async () => {
-        setLoading(true);
-        setError("");
+    const clearRevocationUrls = () => {
+        Object.values(urlsRef.current).forEach(url => {
+            if (url) URL.revokeObjectURL(url);
+        });
+        urlsRef.current = {};
+        setDecryptedUrls({});
+    };
+
+    const handleClearBundle = async () => {
+        if (!window.confirm("Are you sure you want to clear this L1 batch? You will need to re-upload files.")) return;
+        
         try {
-            const { data, error: fetchError } = await supabase
+            setLoading(true);
+            const { error: clearError } = await supabase
                 .from('student_applications')
-                .select('*, student_records(*)')
-                .eq('status', 'Verified')
-                .order('created_at', { ascending: true });
+                .update({ ipfs_cid: null })
+                .eq('application_id', docId);
 
-            if (fetchError) throw fetchError;
-            setQueue(data || []);
-        } catch (err) {
-            console.error("Fetch error:", err);
-            setError("Failed to load the verification queue.");
+            if (clearError) throw clearError;
+
+            setUploadedCidString('');
+            setDocuments([]);
+            setSelectedFiles([]);
+            setActiveDocName(null);
+            clearRevocationUrls();
+            
+            if (fileInputRef.current) {
+                fileInputRef.current.value = "";
+            }
+
+            setAppData(prev => prev ? { ...prev, ipfs_cid: null } : null);
+        } catch (error) {
+            console.error("Failed to clear bundle:", error);
+            alert(`Reset error: ${error.message}`);
         } finally {
             setLoading(false);
         }
     };
 
-    // Parses string structures like "Certification: Attendance, GWA" into arrays
-    const getRequiredDocsList = (docTypeString) => {
-        if (!docTypeString) return ["Document"];
-        if (docTypeString.toUpperCase().includes("CERTIFICATION:")) {
-            const parts = docTypeString.split(/:/i);
-            if (parts[1]) {
-                return parts[1].split(",").map(item => item.trim()).filter(Boolean);
-            }
-        }
-        return [docTypeString];
-    };
+    const handleUploadToIpfs = async (e) => {
+        e.preventDefault();
+        if (selectedFiles.length === 0) return alert("Please select at least one document to upload.");
 
-    const handleFileChange = (requestId, docName, file) => {
-        if (file && file.type !== "application/pdf") {
-            alert("Please select a valid PDF file.");
-            return;
-        }
-        setSelectedFiles(prev => ({
-            ...prev,
-            [requestId]: {
-                ...(prev[requestId] || {}),
-                [docName]: file
-            }
-        }));
-    };
-
-    const handleForwardToHead = async (requestId) => {
-        const targetReq = queue.find(r => r.application_id === requestId);
-        if (!targetReq) return alert("Request data sync error.");
-
-        const requiredDocs = getRequiredDocsList(targetReq.document_type);
-        const uploadedForReq = selectedFiles[requestId] || {};
-
-        const missingDocs = requiredDocs.filter(doc => !uploadedForReq[doc]);
-        if (missingDocs.length > 0) {
-            return alert(`Missing uploads for: ${missingDocs.join(', ')}`);
-        }
-
-        setSubmittingId(requestId);
-        setError("");
-
+        setIsUploading(true);
         try {
-            // Upload all selected PDFs concurrently to IPFS (Edge Function handles AES Encryption)
-            const uploadPromises = requiredDocs.map(async (docName) => {
-                const targetFile = uploadedForReq[docName];
+            const { data: { session } } = await supabase.auth.getSession();
+            const token = session?.access_token;
+            if (!token) throw new Error("Active session token not found. Please re-authenticate.");
+
+            const uploadedSegments = [];
+
+            for (const file of selectedFiles) {
                 const formData = new FormData();
-                formData.append('file', targetFile);
+                formData.append('file', file); 
 
-                const ipfsRes = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ipfs-upload`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-                    body: formData
-                });
+                const response = await fetch(
+                    `${supabase.supabaseUrl}/functions/v1/ipfs-upload`, 
+                    {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${token}` },
+                        body: formData
+                    }
+                );
 
-                if (!ipfsRes.ok) throw new Error(`IPFS upload failed on: ${docName}`);
-                const ipfsData = await ipfsRes.json();
-                if (!ipfsData.success) throw new Error(ipfsData.error || `IPFS error on ${docName}`);
+                if (!response.ok) throw new Error(`Upload failed for ${file.name}`);
+                const data = await response.json();
+                const resolutionCid = data.cid || data.ipfsHash || data.hash || (data.data && data.data.cid);
 
-                return { docName, cid: ipfsData.cid };
-            });
-
-            const uploadResults = await Promise.all(uploadPromises);
-
-            let finalCidString = "";
-            if (uploadResults.length === 1) {
-                finalCidString = uploadResults[0].cid;
-            } else {
-                finalCidString = uploadResults.map(res => `${res.docName}:${res.cid}`).join(' || ');
+                if (resolutionCid) {
+                    uploadedSegments.push(`${file.name}:${resolutionCid}`);
+                } else {
+                    throw new Error(`Edge Function did not return a recognizable CID key for ${file.name}`);
+                }
             }
 
-            const timestamp = new Date().toISOString();
+            const newBundleString = uploadedSegments.join(' || ');
 
-            // Update local DB tables
             const { error: updateError } = await supabase
                 .from('student_applications')
-                .update({
-                    status: 'Ready for Minting',
-                    ipfs_cid: finalCidString,
-                    staff_verified_at: timestamp
-                })
-                .eq('application_id', requestId);
+                .update({ ipfs_cid: newBundleString })
+                .eq('application_id', docId);
 
             if (updateError) throw updateError;
 
-            const { error: credError } = await supabase
-                .from('credentials')
-                .insert([{
-                    application_id: requestId,
-                    ipfs_cid: finalCidString,
-                    student_id: targetReq.student_records?.student_id || targetReq.student_id,
-                    document_type: targetReq.document_type,
-                    status: 'Pending Minting'
-                }]);
-
-            if (credError) throw credError;
-
-            setQueue(prev => prev.filter(r => r.application_id !== requestId));
-            setSelectedFiles(prev => {
-                const updated = { ...prev };
-                delete updated[requestId];
-                return updated;
-            });
-
-        } catch (err) {
-            console.error("Workflow tracking exception:", err);
-            setError(`Submission failed: ${err.message}`);
+            setUploadedCidString(newBundleString);
+            const parsedList = parseCustomIpfsBundle(newBundleString);
+            setDocuments(parsedList);
+            setAppData(prev => prev ? { ...prev, ipfs_cid: newBundleString } : null);
+            
+            alert("L1 Evidence logs uploaded successfully!");
+        } catch (error) {
+            console.error("IPFS Storage Pipeline Failure:", error);
+            alert(`Process failed: ${error.message}`);
         } finally {
-            setSubmittingId(null);
+            setIsUploading(false);
         }
     };
 
+    const handleAccordionToggle = async (doc) => {
+        const isCurrentlyOpen = activeDocName === doc.name;
+        if (isCurrentlyOpen) {
+            setActiveDocName(null);
+            return;
+        }
+
+        setActiveDocName(doc.name);
+
+        if (urlsRef.current[doc.cid]) {
+            if (!decryptedUrls[doc.cid]) {
+                setDecryptedUrls(prev => ({ ...prev, [doc.cid]: urlsRef.current[doc.cid] }));
+            }
+            return;
+        }
+
+        setIsDecrypting(true);
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const token = session?.access_token;
+            if (!token) throw new Error("Active session token not found.");
+
+            const response = await fetch(
+                `${supabase.supabaseUrl}/functions/v1/ipfs-upload?cid=${doc.cid}`, 
+                {
+                    method: 'GET',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                }
+            );
+
+            if (!response.ok) throw new Error(`Edge Function responded with status: ${response.status}`);
+
+            const pdfBlob = await response.blob();
+            const localUrl = URL.createObjectURL(pdfBlob);
+            
+            urlsRef.current[doc.cid] = localUrl;
+            setDecryptedUrls(prev => ({ ...prev, [doc.cid]: localUrl }));
+        } catch (error) {
+            console.error("Failed to load document:", error);
+            alert("Could not load and decrypt document.");
+        } finally {
+            setIsDecrypting(false);
+        }
+    };
+
+    useEffect(() => {
+        return () => {
+            Object.values(urlsRef.current).forEach(url => {
+                if (url) URL.revokeObjectURL(url);
+            });
+        };
+    }, []);
+
+    useEffect(() => {
+        const fetchDetails = async () => {
+            try {
+                setLoading(true);
+                const { data: application, error: appError } = await supabase
+                    .from('student_applications')
+                    .select(`*, student_records!user_id (*)`)
+                    .eq('application_id', docId)
+                    .maybeSingle();
+                
+                if (appError) throw appError;
+
+                if (application) {
+                    application.student_records = Array.isArray(application.student_records)
+                        ? application.student_records[0]
+                        : application.student_records;
+
+                    if (application.ipfs_cid) {
+                        setUploadedCidString(application.ipfs_cid);
+                        const parsedList = parseCustomIpfsBundle(application.ipfs_cid);
+                        setDocuments(parsedList);
+                    }
+                }
+                setAppData(application);
+            } catch (error) {
+                console.error("Fetch failure:", error.message);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        if (docId) fetchDetails();
+    }, [docId]);
+
+    // 🌐 WEB3 INTERCEPT IMPLEMENTATION MIGRATED HERE
+    const handleIssueAndMint = async () => {
+        const recipientId = appData?.student_records?.id;
+        const ipfsCid = uploadedCidString || appData?.ipfs_cid;
+
+        if (!recipientId || !ipfsCid) {
+            alert("Error: Missing Student Record ID or IPFS CID configuration. Cannot mint.");
+            return;
+        }
+        
+        if (!window.confirm("Authorize Blockchain Minting to Arbitrum Sepolia?")) return;
+
+        setIsMinting(true);
+        setMintingStep('Initiating L1 Transaction...');
+        
+        try {
+            // 1. Invoke the Web3 edge contract mint method sequence 
+            const { data, error } = await supabase.functions.invoke('mint-credential', {
+                body: { 
+                    applicationId: docId,
+                    recipientUuid: recipientId,
+                    cid: ipfsCid
+                }
+            });
+
+            if (error) {
+                const errorDetails = error.context?.message || error.message || "Unknown Minting Error";
+                throw new Error(errorDetails);
+            }
+
+            const returnedHash = data?.txHash || data?.hash || "SUCCESS";
+            
+            // 2. 🛡️ INTEGRITY SAFEGUARD: ONLY update state to database after transaction succeeds on-chain
+            setMintingStep('Validating transaction on-chain...');
+            
+            const { error: dbUpdateError } = await supabase
+                .from('student_applications')
+                .update({ 
+                    status: 'L1_Issued'
+                })
+                .eq('application_id', docId);
+
+            if (dbUpdateError) {
+                throw new Error(`Blockchain minted successfully (${returnedHash}), but DB status update failed: ${dbUpdateError.message}`);
+            }
+
+            setMintingStep('Success! Transaction Hash: ' + returnedHash.substring(0, 10) + '...');
+            alert("Asset successfully minted on Arbitrum and status registered to database!");
+            
+            setTimeout(() => navigate('/staff/dashboard'), 3000);
+        } catch (err) {
+            console.error("Critical Minting Failure:", err);
+            setMintingStep(`Failed: ${err.message}`);
+            alert(`Minting Process Failed: ${err.message}. Database state was protected and preserved.`);
+            setIsMinting(false);
+        }
+    };
+
+    if (loading) return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50">
+            <Loader2 className="animate-spin text-indigo-600" size={40} />
+        </div>
+    );
+
+    if (!appData) return (
+        <div className="p-20 text-center flex flex-col items-center gap-4">
+            <AlertCircle className="text-red-500" size={48} />
+            <div className="space-y-2">
+                <h2 className="text-xl font-bold text-slate-800">Application record not found</h2>
+                <button onClick={() => navigate(-1)} className="text-indigo-600 font-bold underline">Go Back</button>
+            </div>
+        </div>
+    );
+
     return (
-        <div className="max-w-7xl mx-auto px-6 py-10 space-y-10 font-sans">
-            <div>
-                <h1 className="text-5xl font-black text-slate-900 tracking-tighter uppercase italic">
-                    Staff <span className="text-indigo-600">Review</span>
-                </h1>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.3em] mt-2">
-                    Final Secure IPFS Preparation & Protocol Dispatch
-                </p>
+        <div className="max-w-7xl mx-auto p-10">
+            <div className="mb-8 flex justify-between items-end">
+                <div>
+                    <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tighter italic">Staff Verification & Issuance</h1>
+                    <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">Level 1 Processing Terminal — Bundle ID: {docId?.substring(0, 8)}</p>
+                </div>
             </div>
 
-            {error && (
-                <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl flex items-center gap-3 text-rose-600 text-xs font-bold uppercase tracking-tight">
-                    <AlertCircle size={16} />
-                    {error}
-                </div>
-            )}
-
-            {loading ? (
-                <div className="flex flex-col items-center justify-center py-32 space-y-4">
-                    <Loader2 className="animate-spin text-indigo-600" size={48} />
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Accessing Ledger...</p>
-                </div>
-            ) : queue.length === 0 ? (
-                <div className="text-center py-32 bg-white rounded-[4rem] border-2 border-dashed border-slate-100 shadow-sm">
-                    <CheckCircle2 className="mx-auto text-slate-200 mb-6" size={64} />
-                    <p className="text-slate-400 font-black uppercase text-xs tracking-[0.4em]">Queue Cleared: No Pending Reviews</p>
-                </div>
-            ) : (
-                <div className="space-y-8">
-                    {queue.map(req => {
-                        const targetDocs = getRequiredDocsList(req.document_type);
-                        const currentUploads = selectedFiles[req.application_id] || {};
-                        const totalUploadedCount = Object.keys(currentUploads).filter(key => currentUploads[key]).length;
-                        const isComplete = totalUploadedCount === targetDocs.length;
-
-                        return (
-                            <div key={req.application_id} className="bg-white border-4 border-indigo-600/30 rounded-[3rem] p-8 shadow-sm flex flex-col gap-8">
-                                
-                                {/* TOP BLOCK HEADER ROW */}
-                                <div className="flex items-center justify-between border-b border-slate-100 pb-6 flex-wrap gap-4">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-16 h-16 bg-slate-900 rounded-full flex items-center justify-center text-white text-2xl font-black uppercase">
-                                            {(req.student_records?.full_name || req.student_name || 'J')[0]}
-                                        </div>
-                                        <div>
-                                            <h2 className="text-2xl font-black tracking-tighter text-indigo-600 uppercase italic">
-                                                {req.student_records?.full_name || req.student_name || 'John Doe'}
-                                            </h2>
-                                            <p className="text-[10px] font-bold text-slate-400 mt-0.5">
-                                                SN: {req.student_records?.student_id || req.student_id || '123-4567-890'}
-                                            </p>
-                                        </div>
-                                        <div className="ml-4 max-w-xl bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-2">
-                                            <p className="text-[9px] font-black uppercase tracking-wider text-indigo-700 wrap-break-word">
-                                                {req.document_type}
-                                            </p>
-                                        </div>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                
+                {/* Left Column */}
+                <div className="lg:col-span-8 space-y-4">
+                    {!uploadedCidString ? (
+                        <div className="bg-white rounded-[3rem] border border-dashed border-slate-300 p-16 text-center shadow-sm">
+                            <UploadCloud className="mx-auto text-slate-400 mb-4" size={52} />
+                            <h3 className="font-black uppercase text-sm tracking-wider text-slate-700 mb-2">Upload Level 1 Verification Bundle</h3>
+                            <p className="text-slate-400 text-xs mb-8 max-w-md mx-auto">Select file assets to bundle and securely load onto IPFS nodes before finalizing smart contracts.</p>
+                            
+                            <form onSubmit={handleUploadToIpfs} className="space-y-5 max-w-sm mx-auto">
+                                <input 
+                                    ref={fileInputRef}
+                                    type="file" 
+                                    multiple 
+                                    onChange={handleFileChange}
+                                    className="block w-full text-xs text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-black file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 transition-all cursor-pointer"
+                                />
+                                {selectedFiles.length > 0 && (
+                                    <div className="text-left bg-slate-50 p-4 rounded-2xl text-[11px] space-y-1.5 text-slate-600 font-mono border border-slate-100">
+                                        {selectedFiles.map((f, idx) => <div key={idx} className="truncate">• {f.name}</div>)}
                                     </div>
+                                )}
+                                <button
+                                    type="submit"
+                                    disabled={isUploading || selectedFiles.length === 0}
+                                    className="w-full py-4 bg-slate-900 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-slate-800 disabled:bg-slate-100 disabled:text-slate-400 transition-colors flex items-center justify-center gap-2"
+                                >
+                                    {isUploading ? <Loader2 className="animate-spin" size={14} /> : null}
+                                    {isUploading ? "Processing Node Upload..." : "Submit Bundle"}
+                                </button>
+                            </form>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            {documents.map((doc) => {
+                                const isOpen = activeDocName === doc.name;
+                                const safeFileName = encodeURIComponent(doc.name.replace(/\s+/g, '_')) + '_ENCRYPTED.enc';
+                                const gatewayUrl = `${IPFS_GATEWAY}${doc.cid}?filename=${safeFileName}`;
 
-                                    <div className="flex items-center gap-3">
-                                        <button className="flex items-center gap-2 px-4 py-2 border-2 border-slate-200 rounded-xl text-[10px] font-black uppercase text-slate-500 hover:bg-slate-50">
-                                            <Minimize2 size={14} /> Minimize
-                                        </button>
-                                        <span className="px-5 py-2.5 bg-amber-400 text-white text-[10px] font-black uppercase rounded-xl tracking-wider shadow-sm">
-                                            {req.status || 'PENDING'}
-                                        </span>
-                                    </div>
-                                </div>
-
-                                {/* TWO COLUMN GRID SYSTEM */}
-                                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                                    
-                                    {/* STEP 1: INSTITUTIONAL CLEARANCE */}
-                                    <div className="lg:col-span-5 space-y-4">
-                                        <div className="flex items-center gap-2 text-indigo-600">
-                                            <CheckCircle2 size={16} />
-                                            <h4 className="text-[11px] font-black uppercase tracking-widest">Step 1: Institutional Clearance</h4>
-                                        </div>
-                                        
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                            {['Accounting Dept', 'University Library', 'Dean\'s Office', 'Registrar Review'].map(dept => (
-                                                <div key={dept} className="p-4 border-2 border-emerald-500 bg-emerald-50/20 rounded-2xl flex items-center justify-between text-emerald-700">
-                                                    <span className="text-[10px] font-black uppercase italic tracking-tight">{dept}</span>
-                                                    <CheckCircle2 size={16} className="text-emerald-600" />
+                                return (
+                                    <div 
+                                        key={doc.name} 
+                                        className={`bg-white rounded-[2.5rem] border transition-all duration-200 overflow-hidden ${
+                                            isOpen ? 'border-indigo-300 shadow-xl shadow-indigo-100/40' : 'border-slate-200 shadow-sm'
+                                        }`}
+                                    >
+                                        <button
+                                            type="button"
+                                            onClick={() => handleAccordionToggle(doc)}
+                                            className="w-full flex items-center justify-between p-6 px-8 bg-slate-50 hover:bg-slate-100/70 transition-colors text-left"
+                                        >
+                                            <div className="flex items-center gap-4 max-w-[70%]">
+                                                <div className={`p-2 rounded-xl transition-colors ${isOpen ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-200/60 text-slate-400'}`}>
+                                                    <FileText size={18} />
                                                 </div>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    {/* STEP 2: DYNAMIC FILE CHECKLIST UPLOAD COMPONENT */}
-                                    <div className="lg:col-span-7 flex flex-col gap-4 border border-slate-100 bg-slate-50/50 p-6 rounded-[2.5rem]">
-                                        <div className="flex items-center gap-2 text-indigo-600">
-                                            <ShieldCheck size={16} />
-                                            <h4 className="text-[11px] font-black uppercase tracking-widest">Step 2: Secure Document Upload</h4>
-                                        </div>
-
-                                        {/* Nested vertical listing viewport */}
-                                        <div className="space-y-2.5 max-h-65 overflow-y-auto pr-2 custom-scrollbar">
-                                            {targetDocs.map((docName) => {
-                                                const fileInstance = currentUploads[docName];
-                                                
-                                                return (
-                                                    <div 
-                                                        key={docName}
-                                                        className={`flex items-center justify-between p-3.5 rounded-2xl border-2 transition-all duration-200 ${
-                                                            fileInstance 
-                                                            ? 'border-emerald-500 bg-emerald-50 text-emerald-900 shadow-sm shadow-emerald-100' 
-                                                            : 'border-slate-200 bg-white text-slate-700'
-                                                        }`}
-                                                    >
-                                                        <div className="flex items-center gap-3 min-w-0 flex-1 pr-4">
-                                                            <div className={`p-2 rounded-xl shrink-0 ${fileInstance ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                                                                {fileInstance ? <FileCheck size={14} /> : <FileText size={14} />}
-                                                            </div>
-                                                            <div className="min-w-0 flex-1">
-                                                                <p className="text-[10px] font-black uppercase tracking-tight truncate" title={docName}>{docName}</p>
-                                                                {fileInstance && (
-                                                                    <p className="text-[9px] font-bold text-emerald-600 truncate mt-0.5">
-                                                                        ✓ {fileInstance.name}
-                                                                    </p>
-                                                                )}
-                                                            </div>
-                                                        </div>
-
-                                                        <label className={`flex items-center gap-1.5 px-4 py-2 rounded-xl border transition-all cursor-pointer font-black text-[9px] uppercase tracking-wide shrink-0 ${
-                                                            fileInstance 
-                                                            ? 'bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700' 
-                                                            : 'bg-slate-900 border-slate-900 text-white hover:bg-indigo-600 hover:border-indigo-600'
-                                                        }`}>
-                                                            <input 
-                                                                type="file" 
-                                                                className="hidden" 
-                                                                accept=".pdf"
-                                                                onChange={(e) => handleFileChange(req.application_id, docName, e.target.files[0])} 
-                                                            />
-                                                            <Upload size={12} />
-                                                            {fileInstance ? 'Change' : 'Upload'}
-                                                        </label>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-
-                                        {/* Action buttons panel aligned underneath the list layout */}
-                                        <div className="flex gap-3 mt-2 border-t border-slate-200/60 pt-4">
-                                            <button 
-                                                onClick={() => handleForwardToHead(req.application_id)}
-                                                disabled={submittingId === req.application_id || !isComplete}
-                                                className="flex-1 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-[11px] tracking-[0.2em] hover:bg-indigo-600 shadow-xl disabled:bg-slate-100 disabled:text-slate-300 disabled:shadow-none transition-all flex items-center justify-center gap-2"
-                                            >
-                                                {submittingId === req.application_id ? (
-                                                    <>
-                                                        <Loader2 size={16} className="animate-spin" />
-                                                        Encrypting & Pushing... ({totalUploadedCount}/{targetDocs.length})
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <Send size={14} />
-                                                        Push to Head ({totalUploadedCount}/{targetDocs.length})
-                                                    </>
-                                                )}
-                                            </button>
+                                                <span className="font-black text-slate-800 text-xs uppercase tracking-wider truncate block">
+                                                    {doc.name}
+                                                </span>
+                                            </div>
                                             
-                                            <button className="px-6 py-4 border-2 border-slate-200 text-slate-400 rounded-2xl font-black uppercase text-[11px] tracking-wider hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-colors">
-                                                Reject
-                                            </button>
-                                        </div>
-                                    </div>
+                                            <div className="flex items-center gap-6 shrink-0">
+                                                <a 
+                                                    href={gatewayUrl} 
+                                                    target="_blank" 
+                                                    rel="noopener noreferrer"
+                                                    onClick={(e) => e.stopPropagation()} 
+                                                    className="flex items-center gap-1.5 text-[9px] font-black uppercase text-slate-400 hover:text-indigo-600 transition-colors tracking-widest"
+                                                >
+                                                    RAW IPFS <ExternalLink size={12} />
+                                                </a>
+                                                <ChevronDown 
+                                                    size={16} 
+                                                    className={`text-slate-400 transition-transform duration-200 transform ${isOpen ? 'rotate-180 text-indigo-500' : ''}`} 
+                                                />
+                                            </div>
+                                        </button>
 
+                                        {isOpen && (
+                                            <div className="p-4 bg-slate-100 border-t border-slate-100 relative min-h-125">
+                                                {(!decryptedUrls[doc.cid] || isDecrypting) ? (
+                                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-100 rounded-3xl z-10">
+                                                        <Loader2 className="animate-spin text-indigo-600 mb-2" size={32} />
+                                                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Decrypting IPFS Stream...</p>
+                                                    </div>
+                                                ) : (
+                                                    <iframe
+                                                        src={`${decryptedUrls[doc.cid]}#toolbar=0`}
+                                                        className="w-full h-125 rounded-3xl bg-white border border-slate-200 shadow-inner"
+                                                        title={`Staff Preview - ${doc.name}`}
+                                                    />
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+
+                {/* Right Column */}
+                <div className="lg:col-span-4 bg-slate-900 text-white p-8 rounded-[3rem] shadow-2xl flex flex-col justify-between border border-slate-800 lg:sticky lg:top-10">
+                    <div>
+                        <div className="flex items-center justify-between mb-8">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-emerald-500/20 p-2 rounded-xl text-emerald-400">
+                                    <CheckCircle size={20} />
+                                </div>
+                                <h3 className="text-xs font-black uppercase text-emerald-400 tracking-[0.2em]">Staff Audit Context</h3>
+                            </div>
+                            
+                            {uploadedCidString && !isMinting && (
+                                <button 
+                                    onClick={handleClearBundle}
+                                    title="Reset current bundle configuration"
+                                    className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                                >
+                                    <RefreshCw size={14} />
+                                </button>
+                            )}
+                        </div>
+                        
+                        <div className="space-y-6 mb-10 border-y border-white/5 py-8">
+                            <div>
+                                <p className="text-[9px] text-white/30 uppercase tracking-widest mb-2 font-black">Student Holder</p>
+                                <p className="text-lg font-bold text-white italic tracking-tight">
+                                    {appData?.student_records?.full_name || 'NOT FOUND'}
+                                </p>
+                            </div>
+                            
+                            <div>
+                                <p className="text-[9px] text-white/30 uppercase tracking-widest mb-2 font-black">Program Allocation</p>
+                                <p className="text-sm font-bold text-slate-300">
+                                    {appData?.student_records?.course || 'UNSPECIFIED'}
+                                </p>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-6">
+                                <div>
+                                    <p className="text-[9px] text-white/30 uppercase tracking-widest mb-2 font-black">System ID</p>
+                                    <p className="text-xs font-mono font-bold text-emerald-400">
+                                        {appData?.student_records?.student_id}
+                                    </p>
+                                </div>
+                                <div>
+                                    <p className="text-[9px] text-white/30 uppercase tracking-widest mb-2 font-black">Total Uploads</p>
+                                    <p className="text-xs font-bold text-indigo-300 uppercase tracking-widest">
+                                        {documents.length} Files Linked
+                                    </p>
                                 </div>
                             </div>
-                        );
-                    })}
+
+                            <div>
+                                <p className="text-[9px] text-white/30 uppercase tracking-widest mb-2 font-black">Target L1 IPFS Array</p>
+                                <p className="text-[8px] font-mono text-slate-500 break-all bg-black/40 p-3 rounded-xl border border-white/5 max-h-28 overflow-y-auto">
+                                    {uploadedCidString || "Awaiting file upload execution..."}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Action Panel */}
+                    <div className="space-y-4">
+                        <button 
+                            onClick={handleIssueAndMint}
+                            disabled={isMinting || !uploadedCidString} 
+                            className="w-full py-6 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 rounded-4xl font-black uppercase text-[10px] tracking-[0.2em] flex items-center justify-center gap-3 transition-all shadow-xl shadow-indigo-900/20"
+                        >
+                            {isMinting ? <Loader2 className="animate-spin" size={18} /> : <Zap size={18} />}
+                            {isMinting ? "Processing Transaction..." : "Authorize & Mint Bundle"}
+                        </button>
+                        
+                        {isMinting && (
+                            <div className="bg-indigo-500/10 border border-indigo-500/20 p-4 rounded-2xl">
+                                <p className="text-center text-[9px] text-indigo-400 animate-pulse uppercase font-black tracking-widest">
+                                    {mintingStep}
+                                </p>
+                            </div>
+                        )}
+                        
+                        <p className="text-[8px] text-center text-white/20 uppercase font-bold tracking-widest">
+                            Authorized By: Staff ({profile?.id?.substring(0,8) || 'SYSTEM'})
+                        </p>
+                    </div>
                 </div>
-            )}
+
+            </div>
         </div>
     );
 }
