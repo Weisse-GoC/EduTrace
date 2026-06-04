@@ -1,6 +1,4 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7"
-import { ethers } from "https://esm.sh/ethers@6.12.1"
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -8,60 +6,67 @@ const corsHeaders = {
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+
+  const aesSecret = Deno.env.get("AES_SECRET_KEY");
+  if (!aesSecret) throw new Error("AES_SECRET_KEY not configured");
+
+  // Helper: Derive 32-byte key from your passphrase
+  const getCryptoKey = async () => {
+    const encoded = new TextEncoder().encode(aesSecret);
+    const hash = await crypto.subtle.digest("SHA-256", encoded);
+    return await crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  };
 
   try {
-    const { applicationId, recipientUuid, cid, issuerId, studentName, documentType, schoolId } = await req.json()
+    // --- UPLOAD (POST) ---
+    if (req.method === 'POST') {
+      const formData = await req.formData();
+      const file = formData.get('file') as File;
+      if (!file) throw new Error("No file provided");
 
-    // 1. Setup Provider/Wallet
-    const provider = new ethers.JsonRpcProvider(Deno.env.get('ARB_RPC_URL'))
-    const wallet = new ethers.Wallet(Deno.env.get('MASTER_WALLET_PRIVATE_KEY')!, provider)
-    
-    // 2. The contract expects an 'address'
-    // We use the wallet address as the owner of this record on the ledger
-    const contractAddr = Deno.env.get('CONTRACT_ADDRESS')!
-    const ABI = ["function issueCredential(address recipient, string memory cid) public returns (bytes32)"]
-    const contract = new ethers.Contract(contractAddr, ABI, wallet)
+      const cryptoKey = await getCryptoKey();
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const encryptedBuffer = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, await file.arrayBuffer());
+      
+      const combined = new Uint8Array(iv.length + encryptedBuffer.byteLength);
+      combined.set(iv, 0);
+      combined.set(new Uint8Array(encryptedBuffer), iv.length);
 
-    // 3. Execute Transaction 
-    // We pass the MASTER wallet address as the recipient (or you can use the student's 
-    // public address if you store it in your DB)
-    const tx = await contract.issueCredential(wallet.address, cid)
-    const receipt = await tx.wait()
+      const pinataFormData = new FormData();
+      pinataFormData.append('file', new File([combined], "doc.enc"));
+      
+      const pinataRes = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${Deno.env.get("PINATA_JWT")}` },
+        body: pinataFormData
+      });
 
-    // 4. Update Database
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    )
+      const pinataData = await pinataRes.json();
+      return new Response(JSON.stringify({ success: true, cid: pinataData.IpfsHash }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
 
-    const { error: dbError } = await supabase.from('credentials').upsert({
-      application_id: applicationId,
-      issuer_id: issuerId,
-      recipient_id: recipientUuid,
-      student_name: studentName,
-      school_id: schoolId,
-      document_type: documentType,
-      tx_hash: receipt.hash,
-      blockchain_hash: receipt.logs[0].topics[1], // Directly extracting the indexed fileHash topic from logs
-      file_url: `https://gateway.pinata.cloud/ipfs/${cid}`,
-      ipfs_cid: cid,
-      status: 'Issued'
-    }, { onConflict: 'application_id' })
+    // --- DOWNLOAD (GET) ---
+    if (req.method === 'GET') {
+      const url = new URL(req.url);
+      const cid = url.searchParams.get("cid");
+      if (!cid) throw new Error("Missing CID");
 
-    if (dbError) throw dbError
+      const ipfsRes = await fetch(`https://gateway.pinata.cloud/ipfs/${cid}`);
+      const combined = new Uint8Array(await ipfsRes.arrayBuffer());
+      
+      const iv = combined.slice(0, 12);
+      const data = combined.slice(12);
+      const cryptoKey = await getCryptoKey();
+      
+      const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, data);
 
-    await supabase.from('student_applications').update({ status: 'Issued' }).eq('application_id', applicationId)
+      return new Response(decrypted, {
+        headers: { ...corsHeaders, "Content-Type": "application/pdf" }
+      });
+    }
 
-    return new Response(JSON.stringify({ success: true, txHash: receipt.hash }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 200,
-    })
   } catch (error) {
-    console.error("MINTING ERROR:", error)
-    return new Response(JSON.stringify({ error: error.message }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 500,
-    })
+    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 400, headers: corsHeaders });
   }
-})
+});
