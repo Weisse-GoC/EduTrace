@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase, getCredentialsByRecipientId } from '../../services/supabaseClient';
 import { useAuth } from '../../hooks/useAuth';
+import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus'; // ◄ Imported Custom Hook
 import { 
     Download, 
     Loader2, 
@@ -60,7 +61,7 @@ export default function StudentDashboard() {
         if (isMounted.current) setCredentials(verifiedDocs);
     }, [checkBlockchainStatus]);
 
-    // FETCH METHOD (FIXED: Strict guard check prevents GET undefined 400 Bad Request)
+    // FETCH METHOD (Strict guard check prevents GET undefined 400 Bad Request)
     const fetchCredentials = useCallback(async (silent = false) => {
         if (!user || !user.id) {
             console.warn("Fetch blocked: User session context is not initialized yet.");
@@ -81,6 +82,14 @@ export default function StudentDashboard() {
             if (!silent && isMounted.current) setLoading(false);
         }
     }, [processCredentials, user]);
+
+    // 💡 Wrapper to trigger a silent background sync upon tab focus
+    const handleSilentRefresh = useCallback(() => {
+        fetchCredentials(true);
+    }, [fetchCredentials]);
+
+    // ⚡ Active visibility listener ensuring immediate local ledger updates on refocus
+    useRefreshOnFocus(handleSilentRefresh);
 
     // Lifecycle Management
     useEffect(() => {
@@ -107,7 +116,6 @@ export default function StudentDashboard() {
                 supabase.removeChannel(channel);
             };
         } else {
-            // Keep loading spinner visible while waiting for the auth layer to provide user context
             if (isMounted.current) setLoading(true);
         }
     }, [fetchCredentials, user?.id]);
@@ -142,6 +150,7 @@ export default function StudentDashboard() {
                         <input 
                             type="text"
                             placeholder="SEARCH ARCHIVES..."
+                            value={searchTerm} // ◄ Controlled value binding matching the structural pattern
                             className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-2xl text-xs font-bold tracking-widest focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none"
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
@@ -172,7 +181,6 @@ export default function StudentDashboard() {
                                     <tr><td colSpan="4" className="py-20 text-center text-slate-400 font-bold uppercase text-xs tracking-widest">No Documents Found</td></tr>
                                 ) : (
                                     filteredCreds.map((item, index) => {
-                                        // Used application_id as stable key, which aligns with our backend schema.
                                         const stableKey = item.application_id ? String(item.application_id) : `row-index-${index}`;
                                         return (
                                             <tr key={stableKey} className="group hover:bg-slate-50/80 transition-all">
@@ -196,7 +204,6 @@ export default function StudentDashboard() {
                                                 </td>
                                                 <td className="px-8 py-6">
                                                     <div className="flex justify-end gap-3">
-                                                        {/* Fixed: Routes to the QR Code Generator component */}
                                                         <button
                                                             onClick={() => navigate(`/student/qr-generate/${item.application_id}`)}
                                                             className="p-3 bg-white border border-slate-200 text-slate-400 hover:text-indigo-600 hover:border-indigo-600 rounded-xl transition-all"
@@ -214,7 +221,6 @@ export default function StudentDashboard() {
                                                         >
                                                             <Download size={18} />
                                                         </button>
-                                                        {/* Fixed: Routes to the Public Verification component */}
                                                         <button 
                                                             onClick={() => navigate(`/verify/${item.application_id || index}`)}
                                                             className="p-3 bg-white border border-slate-200 text-slate-400 hover:text-indigo-600 hover:border-indigo-600 rounded-xl transition-all" 
