@@ -1,5 +1,4 @@
 // src/services/headDashboardService.js
-// src/services/headDashboardService.js
 import { supabase } from "./supabaseClient";
 
 export async function fetchHeadDashboardData() {

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../services/supabaseClient';
 import { fetchHeadDashboardData } from '../../services/headDashboardService';
 import { useAuth } from '../../hooks/useAuth'; 
+import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus'; // ◄ Imported Custom Hook
 import SignatureUpload from './SignatureUpload'; 
 
 import {
@@ -60,20 +61,19 @@ export default function HeadDashboard() {
         }
     }, []);
 
+    // 💡 Wrapper to force a clean, silent background update on window refocus
+    const handleSilentRefresh = useCallback(() => {
+        fetchDashboardData(true);
+    }, [fetchDashboardData]);
+
+    // ⚡ Hook up the window/tab refocus listener
+    useRefreshOnFocus(handleSilentRefresh);
+
     useEffect(() => {
         isMounted.current = true;
         fetchDashboardData();
 
-        const handleVisibilityRefresh = () => {
-            if (document.visibilityState === 'visible') {
-                fetchDashboardData(true);
-            }
-        };
-
-        const handleWindowFocus = () => {
-            fetchDashboardData(true);
-        };
-
+        // Realtime sync handling database adjustments
         const channel = supabase
             .channel('head_issuance_sync')
             .on('postgres_changes', { 
@@ -90,13 +90,8 @@ export default function HeadDashboard() {
                 if (status === 'CLOSED' && isMounted.current) setIsLive(false);
             });
 
-        document.addEventListener('visibilitychange', handleVisibilityRefresh);
-        window.addEventListener('focus', handleWindowFocus);
-
         return () => {
             isMounted.current = false;
-            document.removeEventListener('visibilitychange', handleVisibilityRefresh);
-            window.removeEventListener('focus', handleWindowFocus);
             supabase.removeChannel(channel);
         };
     }, [fetchDashboardData]);
