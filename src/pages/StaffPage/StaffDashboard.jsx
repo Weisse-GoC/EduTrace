@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { supabase } from '../../services/supabaseClient'; 
 import { useAuth } from '../../hooks/useAuth';
+import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus';
 import { 
     Search, Loader2, AlertCircle, Users, 
     Clock, CheckCircle, LayoutGrid, 
@@ -19,18 +20,21 @@ export default function StaffDashboard() {
     const [fetchError, setFetchError] = useState("");
     const [actionError, setActionError] = useState("");
     const [updatingClearance, setUpdatingClearance] = useState("");
-    const [isProcessingAction, setIsProcessingAction] = useState(false); 
+    const [isProcessingAction, setIsProcessingAction] = useState(false);
+    // Dynamic overlay label for IPFS upload vs minting
+    const [processingOverlay, setProcessingOverlay] = useState({
+        title: 'Processing',
+        subtitle: 'Please wait. Do not refresh.'
+    });
     const isMounted = useRef(true);
 
-    const stats = useMemo(() => {
-        return {
-            total: requests.length,
-            pending: requests.filter(r => r.status === 'Pending').length,
-            verified: requests.filter(r => r.status === 'Verified').length,
-            issued: requests.filter(r => r.status === 'Minted' || r.status === 'Issued').length,
-            rejected: requests.filter(r => r.status === 'Rejected').length
-        };
-    }, [requests]);
+    const stats = useMemo(() => ({
+        total: requests.length,
+        pending: requests.filter(r => r.status === 'Pending').length,
+        verified: requests.filter(r => r.status === 'Verified').length,
+        issued: requests.filter(r => ['Minted', 'Issued', 'L1_Issued'].includes(r.status)).length,
+        rejected: requests.filter(r => r.status === 'Rejected').length
+    }), [requests]);
 
     const fetchRequests = useCallback(async (silent = false) => {
         if (!isMounted.current) return;
@@ -45,6 +49,7 @@ export default function StaffDashboard() {
                 .select(`
                     *,
                     student_records!user_id (
+                        id,
                         full_name,
                         student_id,
                         course,
@@ -54,7 +59,16 @@ export default function StaffDashboard() {
                 .order('created_at', { ascending: false });
             
             if (error) throw error;
-            if (isMounted.current) setRequests(data || []);
+
+            // Normalize the joined relation to always be an object, not an array
+            const normalized = (data || []).map(app => ({
+                ...app,
+                student_records: Array.isArray(app.student_records)
+                    ? app.student_records[0]
+                    : app.student_records
+            }));
+
+            if (isMounted.current) setRequests(normalized);
         } catch (error) {
             console.error("[StaffOps] Fetch Failure:", error);
             if (isMounted.current) {
@@ -68,6 +82,12 @@ export default function StaffDashboard() {
             }
         }
     }, []);
+
+    const handleSilentRefresh = useCallback(() => {
+        fetchRequests(true);
+    }, [fetchRequests]);
+
+    useRefreshOnFocus(handleSilentRefresh);
 
     useEffect(() => {
         isMounted.current = true;
@@ -103,90 +123,109 @@ export default function StaffDashboard() {
 
             if (error) throw error;
 
-            setRequests(prev => prev.map((req) =>
+            setRequests(prev => prev.map(req =>
                 req.application_id === applicationId ? { ...req, [field]: nextValue } : req
             ));
         } catch (error) {
-            setActionError(error?.message || "Update failed.");
+            setActionError(error?.message || "Clearance update failed.");
         } finally {
             setUpdatingClearance("");
         }
     };
 
-    // Helper to parse multi-document strings
+    // Parses "CERTIFICATION: DocA, DocB" format into an array of doc names
     const getRequiredDocsList = (docTypeString) => {
         if (!docTypeString) return ["Document"];
         if (docTypeString.toUpperCase().includes("CERTIFICATION:")) {
             const parts = docTypeString.split(/:/i);
-            if (parts[1]) {
-                return parts[1].split(",").map(item => item.trim()).filter(Boolean);
-            }
+            if (parts[1]) return parts[1].split(",").map(item => item.trim()).filter(Boolean);
         }
         return [docTypeString];
     };
 
-    // UPGRADED: Handles filesMap object instead of a single selectedFile
+    // ─────────────────────────────────────────────────────────────────────────
+    // STATUS UPDATE — handles both issuance routes.
+    // Both routes upload to IPFS first; they differ only in the resulting status:
+    //   Verified     = staff uploads + forwards to head for minting in Prepare.jsx
+    //   To_be_Issued = staff uploads + will mint themselves via Issue to Student
+    // ─────────────────────────────────────────────────────────────────────────
     const handleUpdateStatus = async (applicationId, newStatus, studentName, studentId, studentAuthId, filesMap = {}) => {
         if (!profile) return;
-        
+
+        // Guard against explicit null being passed from the card
+        const safeFilesMap = filesMap || {};
+
         try {
             setActionError("");
-            setIsProcessingAction(true); 
+            setIsProcessingAction(true);
 
             const targetReq = requests.find(r => r.application_id === applicationId);
             if (!targetReq) throw new Error("Request record not found.");
 
             let ipfsCid = null;
 
-            if (newStatus === 'Verified' && Object.keys(filesMap).length > 0) {
+            // ── IPFS UPLOAD: fires for both routes when files are attached ───
+            // Verified   = staff uploads + pushes to head for minting
+            // To_be_Issued = staff uploads + will mint themselves via Issue to Student
+            if ((newStatus === 'Verified' || newStatus === 'To_be_Issued') && Object.keys(safeFilesMap).length > 0) {
+                setProcessingOverlay({
+                    title: 'Uploading to IPFS',
+                    subtitle: 'Securing certificates on the decentralized web. Do not refresh.'
+                });
+
                 const requiredDocs = getRequiredDocsList(targetReq.document_type);
-                
-                // Upload all documents concurrently
+
                 const uploadPromises = requiredDocs.map(async (docName) => {
-                    const targetFile = filesMap[docName];
+                    const targetFile = safeFilesMap[docName];
                     if (!targetFile) throw new Error(`Missing attachment for: ${docName}`);
 
                     const formData = new FormData();
                     formData.append('file', targetFile);
 
-                    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ipfs-upload`, {
-                        method: 'POST',
-                        headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-                        body: formData
-                    });
+                    const response = await fetch(
+                        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ipfs-upload`,
+                        {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+                            body: formData
+                        }
+                    );
 
                     const result = await response.json();
-                    if (!result.success) throw new Error(result.error || `IPFS processing failure on ${docName}`);
-                    
+                    if (!result.success) throw new Error(result.error || `IPFS failure on ${docName}`);
                     return { docName, cid: result.cid };
                 });
 
                 const uploadResults = await Promise.all(uploadPromises);
 
-                // Build mapping string or clean single hash string
-                if (uploadResults.length === 1) {
-                    ipfsCid = uploadResults[0].cid;
-                } else {
-                    ipfsCid = uploadResults.map(res => `${res.docName}:${res.cid}`).join(' || ');
-                }
+                ipfsCid = uploadResults.length === 1
+                    ? uploadResults[0].cid
+                    : uploadResults.map(r => `${r.docName}:${r.cid}`).join(' || ');
             }
 
             const timestamp = new Date().toISOString();
 
-            // Perform Database Synchronization
+            // ── DB UPDATE: build payload conditionally ───────────────────────
+            // - Verified + CID:     status + ipfs_cid + completed_at
+            // - To_be_Issued + CID: status + ipfs_cid + completed_at
+            // - Rejected:           status + completed_at
+            const updatePayload = { status: newStatus };
+            if (ipfsCid) {
+                updatePayload.ipfs_cid = ipfsCid;
+                updatePayload.completed_at = timestamp;
+            } else if (newStatus === 'Rejected') {
+                updatePayload.completed_at = timestamp;
+            }
+
             const { error: appError } = await supabase
                 .from('student_applications')
-                .update({ 
-                    status: newStatus,
-                    ipfs_cid: ipfsCid,
-                    completed_at: timestamp 
-                })
+                .update(updatePayload)
                 .eq('application_id', applicationId);
 
             if (appError) throw appError;
 
-            // Create Decentralized Credential Log Entry
-            if (newStatus === 'Verified' && ipfsCid) {
+            // ── CREDENTIAL LOG: insert whenever IPFS CID is secured ─────────
+            if ((newStatus === 'Verified' || newStatus === 'To_be_Issued') && ipfsCid) {
                 const { error: credError } = await supabase
                     .from('credentials')
                     .insert([{
@@ -197,15 +236,18 @@ export default function StaffDashboard() {
                         school_id: studentId,
                         document_type: targetReq.document_type,
                         ipfs_cid: ipfsCid,
-                        status: 'Verified',
+                        status: 'Staged',
                         issued_at: timestamp
                     }]);
-                
+
                 if (credError) throw credError;
             }
 
-            setRequests(prev => prev.map(req => 
-                req.application_id === applicationId ? { ...req, status: newStatus, ipfs_cid: ipfsCid, completed_at: timestamp } : req
+            // Optimistic local state update
+            setRequests(prev => prev.map(req =>
+                req.application_id === applicationId
+                    ? { ...req, ...updatePayload }
+                    : req
             ));
             setExpandedId(null);
 
@@ -217,10 +259,76 @@ export default function StaffDashboard() {
         }
     };
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // MINT REQUEST — invoked by "Issue to Student" button on To_be_Issued cards.
+    // Calls the mint-credential edge function then updates status to L1_Issued.
+    // ─────────────────────────────────────────────────────────────────────────
+    const handleMintRequest = async (applicationId) => {
+        if (!profile) return;
+
+        try {
+            setActionError("");
+            setIsProcessingAction(true);
+            setProcessingOverlay({
+                title: 'Processing Transaction',
+                subtitle: 'Authorizing mint on Arbitrum Sepolia. Do not refresh.'
+            });
+
+            const targetReq = requests.find(r => r.application_id === applicationId);
+            if (!targetReq) throw new Error("Request record not found.");
+
+            const ipfsCid = targetReq.ipfs_cid;
+            if (!ipfsCid) throw new Error("No IPFS CID found. Run 'Push for Issuance' first.");
+
+            const recipientId = targetReq.student_records?.id || targetReq.user_id;
+
+            const { data, error } = await supabase.functions.invoke('mint-credential', {
+                body: {
+                    applicationId,
+                    recipientUuid: recipientId,
+                    cid: ipfsCid
+                }
+            });
+
+            if (error) {
+                const msg = error.context?.message || error.message || "Unknown minting error";
+                throw new Error(msg);
+            }
+
+            // Only write to DB after on-chain confirmation
+            const { error: dbError } = await supabase
+                .from('student_applications')
+                .update({ status: 'L1_Issued' })
+                .eq('application_id', applicationId);
+
+            if (dbError) throw dbError;
+
+            // Mark credential log as fully issued
+            await supabase
+                .from('credentials')
+                .update({ status: 'Issued' })
+                .eq('application_id', applicationId);
+
+            setRequests(prev => prev.map(req =>
+                req.application_id === applicationId
+                    ? { ...req, status: 'L1_Issued' }
+                    : req
+            ));
+            setExpandedId(null);
+
+        } catch (error) {
+            console.error("MINTING FAILED:", error);
+            setActionError(`Minting Error: ${error.message}`);
+        } finally {
+            setIsProcessingAction(false);
+        }
+    };
+
     const filteredRequests = requests.filter(req => {
         const searchLower = searchTerm.toLowerCase();
-        const name = req.student_name?.toLowerCase() || ""; 
-        const sid = req.student_id?.toLowerCase() || "";    
+        // Search in nested student_records (normalized) as well as flat fields
+        const name = (req.student_records?.full_name || req.student_name || "").toLowerCase();
+        const sid = (req.student_records?.student_id || req.student_id || "").toLowerCase();
         const matchesSearch = name.includes(searchLower) || sid.includes(searchLower);
         const matchesStatus = statusFilter === "All" || req.status === statusFilter;
         return matchesSearch && matchesStatus;
@@ -230,27 +338,38 @@ export default function StaffDashboard() {
         return (
             <div className="h-screen w-full flex flex-col items-center justify-center bg-[#0F172A]">
                 <Loader2 className="w-12 h-12 text-indigo-500 animate-spin" />
-                <p className="text-indigo-400 font-black uppercase tracking-[0.5em] text-[10px] mt-6">Initializing Staff Terminal</p>
+                <p className="text-indigo-400 font-black uppercase tracking-[0.5em] text-[10px] mt-6">
+                    Initializing Staff Terminal
+                </p>
             </div>
         );
     }
 
     return (
         <div className="max-w-7xl mx-auto px-6 py-10 space-y-10 animate-in fade-in duration-500">
+
+            {/* ── Full-screen processing overlay ───────────────────────────── */}
             {isProcessingAction && (
                 <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex flex-col items-center justify-center">
                     <div className="bg-white p-12 rounded-[3rem] shadow-2xl flex flex-col items-center text-center max-w-sm">
                         <Loader2 className="w-16 h-16 text-indigo-600 animate-spin mb-6" />
-                        <h2 className="text-2xl font-black uppercase italic tracking-tighter mb-2 text-slate-900">Uploading to IPFS</h2>
-                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest leading-relaxed">Securing certificates on the decentralized web. Do not refresh.</p>
+                        <h2 className="text-2xl font-black uppercase italic tracking-tighter mb-2 text-slate-900">
+                            {processingOverlay.title}
+                        </h2>
+                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest leading-relaxed">
+                            {processingOverlay.subtitle}
+                        </p>
                     </div>
                 </div>
             )}
 
+            {/* ── Header ───────────────────────────────────────────────────── */}
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-8">
                 <div className="space-y-2">
                     <div className="flex items-center gap-3">
-                        <span className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[9px] font-black uppercase tracking-widest border border-indigo-100">Registry Node 01</span>
+                        <span className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[9px] font-black uppercase tracking-widest border border-indigo-100">
+                            Registry Node 01
+                        </span>
                         {isSyncing && <RefreshCw size={12} className="text-indigo-400 animate-spin" />}
                     </div>
                     <h1 className="text-6xl font-black text-slate-900 tracking-tighter uppercase italic">
@@ -259,14 +378,14 @@ export default function StaffDashboard() {
                 </div>
 
                 <div className="flex bg-white p-1.5 rounded-4xl shadow-sm border border-slate-100 overflow-x-auto">
-                    {["All", "Pending", "Verified", "Approved", "Rejected"].map((tab) => (
-                        <button 
-                            key={tab} 
+                    {["All", "Pending", "Verified", "To_be_Issued", "Rejected"].map((tab) => (
+                        <button
+                            key={tab}
                             onClick={() => setStatusFilter(tab)}
                             className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase transition-all tracking-widest whitespace-nowrap ${
-                                statusFilter === tab 
-                                ? "bg-slate-900 text-white shadow-xl shadow-slate-200" 
-                                : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+                                statusFilter === tab
+                                    ? "bg-slate-900 text-white shadow-xl shadow-slate-200"
+                                    : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
                             }`}
                         >
                             {tab}
@@ -275,13 +394,15 @@ export default function StaffDashboard() {
                 </div>
             </div>
 
+            {/* ── Stat cards ───────────────────────────────────────────────── */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-                <StatCard label="Total Workload" value={stats.total} icon={<Users size={20}/>} color="indigo" />
-                <StatCard label="Awaiting Review" value={stats.pending} icon={<Clock size={20}/>} color="amber" />
-                <StatCard label="Ready for Head" value={stats.verified} icon={<CheckCircle size={20}/>} color="emerald" />
-                <StatCard label="Processed" value={stats.issued} icon={<LayoutGrid size={20}/>} color="slate" />
+                <StatCard label="Total Workload"   value={stats.total}    icon={<Users size={20}/>}       color="indigo" />
+                <StatCard label="Awaiting Review"  value={stats.pending}  icon={<Clock size={20}/>}       color="amber" />
+                <StatCard label="Ready for Head"   value={stats.verified} icon={<CheckCircle size={20}/>} color="emerald" />
+                <StatCard label="Processed"        value={stats.issued}   icon={<LayoutGrid size={20}/>}  color="slate" />
             </div>
 
+            {/* ── Error banner ─────────────────────────────────────────────── */}
             {(fetchError || actionError) && (
                 <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-4xl px-6 py-5 flex items-start gap-4">
                     <AlertCircle className="mt-0.5 shrink-0" size={18} />
@@ -292,17 +413,22 @@ export default function StaffDashboard() {
                 </div>
             )}
 
+            {/* ── Search ───────────────────────────────────────────────────── */}
             <div className="relative group">
-                <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-indigo-500 transition-colors" size={22} />
-                <input 
-                    type="text" 
-                    placeholder="Filter by Student ID or Name..." 
+                <Search
+                    className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-indigo-500 transition-colors"
+                    size={22}
+                />
+                <input
+                    type="text"
+                    placeholder="Filter by Student ID or Name..."
                     className="w-full pl-16 pr-8 py-6 rounded-[2.5rem] bg-white border border-slate-100 shadow-sm focus:ring-8 focus:ring-indigo-500/5 outline-none font-bold text-slate-700 transition-all placeholder:text-slate-300"
-                    value={searchTerm} 
-                    onChange={(e) => setSearchTerm(e.target.value)} 
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
                 />
             </div>
 
+            {/* ── Request list ─────────────────────────────────────────────── */}
             <div className="space-y-4 pb-20">
                 {filteredRequests.length === 0 ? (
                     <div className="py-32 bg-white rounded-[4rem] border-2 border-dashed border-slate-100 flex flex-col items-center">
@@ -311,13 +437,16 @@ export default function StaffDashboard() {
                     </div>
                 ) : (
                     filteredRequests.map(req => (
-                        <StaffRequestCard 
+                        <StaffRequestCard
                             key={req.application_id}
                             req={req}
                             isExpanded={expandedId === req.application_id}
-                            onToggleExpand={() => setExpandedId(expandedId === req.application_id ? null : req.application_id)}
+                            onToggleExpand={() => setExpandedId(
+                                expandedId === req.application_id ? null : req.application_id
+                            )}
                             onUpdateStatus={handleUpdateStatus}
                             onToggleClearance={handleToggleClearance}
+                            onMintAsset={handleMintRequest}   // ← minting hook wired in
                             updatingClearance={updatingClearance}
                         />
                     ))
@@ -327,15 +456,14 @@ export default function StaffDashboard() {
     );
 }
 
-// Retained inline sub-components safely
 function StatCard({ icon, label, value, color }) {
     const colors = {
-        indigo: "bg-indigo-600 shadow-indigo-100",
-        amber: "bg-amber-500 shadow-amber-100",
+        indigo:  "bg-indigo-600 shadow-indigo-100",
+        amber:   "bg-amber-500 shadow-amber-100",
         emerald: "bg-emerald-500 shadow-emerald-100",
-        slate: "bg-slate-900 shadow-slate-100"
+        slate:   "bg-slate-900 shadow-slate-100"
     };
-    
+
     return (
         <div className="bg-white p-8 rounded-[2.5rem] border border-slate-50 shadow-sm hover:shadow-md transition-shadow">
             <div className={`${colors[color]} w-12 h-12 rounded-2xl flex items-center justify-center text-white mb-4 shadow-lg`}>

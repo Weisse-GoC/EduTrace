@@ -26,19 +26,17 @@ export default function PublicVerification() {
     const [selectedDoc, setSelectedDoc] = useState(null); 
     const [blockchainData, setBlockchainData] = useState(null);
     const [showBackButton, setShowBackButton] = useState(false); 
-    const [downloadConfirmed, setDownloadConfirmed] = useState(false); 
+    const [downloadConfirmed, setDownloadConfirmed] = useState(false);
+    const [isDownloading, setIsDownloading] = useState(false);
 
     // --- SECURE LIVE STREAMING & CACHE STATE ---
     const [decryptedUrls, setDecryptedUrls] = useState({}); 
     const [isDecrypting, setIsDecrypting] = useState(false);
     
-    // The master persistent cache tracking { [cid]: objectUrl }
     const urlsRef = useRef({});
 
-    // Dynamic helper to extract the active document's decrypted URL from state
     const currentDecryptedUrl = selectedDoc ? decryptedUrls[selectedDoc.cid] : null;
 
-    // Parses custom bundle structure "Name:CID || Name:CID"
     const parseCustomIpfsBundle = (ipfsCid) => {
         if (!ipfsCid) return [];
         const rawItems = String(ipfsCid).split('||');
@@ -54,14 +52,11 @@ export default function PublicVerification() {
         }).filter(doc => doc.cid.length > 0);
     };
 
-    // 1. Initial Cryptographic Verification & On-Chain Integrity Check
+    // 1. Initial Cryptographic Verification
     useEffect(() => {
         const dynamicHistory = window.history.state?.idx > 0;
         const internalReferrer = document.referrer.includes(window.location.host);
-        
-        if (dynamicHistory || internalReferrer) {
-            setShowBackButton(true);
-        }
+        if (dynamicHistory || internalReferrer) setShowBackButton(true);
 
         const verifyDocument = async () => {
             try {
@@ -72,32 +67,23 @@ export default function PublicVerification() {
                     .maybeSingle(); 
 
                 if (error || !data) {
-                    console.error("Database fetch error or row empty:", error);
                     setStatus('failed');
                     return;
                 }
 
                 setDocData(data);
-
                 const parsedList = parseCustomIpfsBundle(data.ipfs_cid || data.file_url);
                 setDocuments(parsedList);
-                if (parsedList.length > 0) {
-                    setSelectedDoc(parsedList[0]);
-                }
+                if (parsedList.length > 0) setSelectedDoc(parsedList[0]);
 
                 const provider = new ethers.JsonRpcProvider(import.meta.env.VITE_ARBITRUM_RPC);
                 const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
-                
                 const isAuthentic = await contract.verifyDocument(data.blockchain_hash);
 
                 if (isAuthentic) {
-                    setBlockchainData({
-                        hash: data.blockchain_hash, 
-                        tx: data.tx_hash            
-                    });
+                    setBlockchainData({ hash: data.blockchain_hash, tx: data.tx_hash });
                     setStatus('verified');
                 } else {
-                    console.warn("On-chain verification failed for hash:", data.blockchain_hash);
                     setStatus('failed');
                 }
             } catch (error) {
@@ -109,21 +95,18 @@ export default function PublicVerification() {
         if (id) verifyDocument();
     }, [id]);
 
-    // 2. MASTER UNMOUNT CLEANUP: Erase all memory leaks when the user leaves the page entirely
+    // 2. Master unmount cleanup
     useEffect(() => {
         return () => {
-            // Revoke every single blob URL generated during this viewing session
             Object.values(urlsRef.current).forEach(url => {
                 if (url) URL.revokeObjectURL(url);
             });
         };
     }, []);
 
-    // 3. Secure Live View Cache Streamer (Prevents redundant decryption roundtrips)
+    // 3. Secure Live Preview Streamer (clean, unstamped)
     useEffect(() => {
         if (!selectedDoc) return;
-
-        // HIT CACHE: If this CID has already been decrypted, skip the network request entirely!
         if (urlsRef.current[selectedDoc.cid]) {
             setIsDecrypting(false);
             return;
@@ -133,25 +116,23 @@ export default function PublicVerification() {
 
         const fetchDecryptedAsset = async () => {
             setIsDecrypting(true);
-
             try {
                 const { data: { session } } = await supabase.auth.getSession();
-                
-                const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ipfs-upload?cid=${selectedDoc.cid}`, {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`
+                const response = await fetch(
+                    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ipfs-upload?cid=${selectedDoc.cid}`,
+                    {
+                        method: 'GET',
+                        headers: {
+                            'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`
+                        }
                     }
-                });
+                );
 
                 if (!response.ok) throw new Error("Decryption function failed");
-
                 const blob = await response.blob();
                 
                 if (active) {
                     const localUrl = URL.createObjectURL(blob);
-                    
-                    // Simultaneously write to persistent Ref Cache AND React UI State
                     urlsRef.current[selectedDoc.cid] = localUrl;
                     setDecryptedUrls(prev => ({ ...prev, [selectedDoc.cid]: localUrl }));
                 }
@@ -163,64 +144,62 @@ export default function PublicVerification() {
         };
 
         fetchDecryptedAsset();
-
-        return () => {
-            active = false;
-            // NOTE: We no longer revoke the localUrl here. It stays alive inside urlsRef.current!
-        };
+        return () => { active = false; };
     }, [selectedDoc]); 
 
-    const isImageAsset = (name) => {
-        return name ? /\.(jpeg|jpg|gif|png|webp|avif)$/i.test(name) : false;
-    };
+    const isImageAsset = (name) =>
+        name ? /\.(jpeg|jpg|gif|png|webp|avif)$/i.test(name) : false;
 
-    // 4. Decrypted Download Pipeline Utility
+    // 4. Stamped Download Pipeline — calls stamp-pdf edge function
     const triggerFileDownload = async (doc) => {
-        if (!doc) return;
-        
-        let targetUrl = urlsRef.current[doc.cid];
+        if (!doc || !docData) return;
+        setIsDownloading(true);
 
-        // If it isn't cached yet (e.g., downloading via a batch export without previewing first)
-        if (!targetUrl) {
-            try {
-                const { data: { session } } = await supabase.auth.getSession();
-                
-                const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ipfs-upload?cid=${doc.cid}`, {
-                    method: 'GET',
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+
+            const response = await fetch(
+                `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stamp-pdf`,
+                {
+                    method: 'POST',
                     headers: {
-                        'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`
-                    }
-                });
-                
-                const blob = await response.blob();
-                targetUrl = URL.createObjectURL(blob);
-                
-                // Backfill the cache so the user can preview it instantly without re-fetching later
-                urlsRef.current[doc.cid] = targetUrl;
-                setDecryptedUrls(prev => ({ ...prev, [doc.cid]: targetUrl }));
-            } catch (error) {
-                console.error("Download decryption pipeline failed", error);
-                return;
-            }
-        }
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+                    },
+                    body: JSON.stringify({
+                        cid: doc.cid,
+                        docStatus: docData.status,   // "L1_Issued" | "Issued"
+                        applicationId: id,            // for QR URL generation
+                    }),
+                }
+            );
 
-        const link = document.createElement('a');
-        link.href = targetUrl;
-        link.target = '_blank';
-        const ext = isImageAsset(doc.name) ? 'png' : 'pdf';
-        link.download = `Verified-${doc.name.replace(/\s+/g, '-')}-${id ? id.substring(0, 6) : 'ASSET'}.${ext}`;
-        
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+            if (!response.ok) throw new Error("Stamp pipeline failed");
+
+            const blob = await response.blob();
+            const stampedUrl = URL.createObjectURL(blob);
+
+            const link = document.createElement('a');
+            link.href = stampedUrl;
+            link.download = `Verified-${doc.name.replace(/\s+/g, '-')}-${id?.substring(0, 6)}.pdf`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            setTimeout(() => URL.revokeObjectURL(stampedUrl), 5000);
+
+        } catch (err) {
+            console.error("Download stamping failed:", err);
+        } finally {
+            setIsDownloading(false);
+        }
     };
 
     const handleDownloadAll = async () => {
         if (!downloadConfirmed || documents.length === 0) return;
-        
         for (let i = 0; i < documents.length; i++) {
             await triggerFileDownload(documents[i]);
-            await new Promise(resolve => setTimeout(resolve, 300)); 
+            await new Promise(resolve => setTimeout(resolve, 500));
         }
     };
 
@@ -243,7 +222,6 @@ export default function PublicVerification() {
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-250 h-75 bg-indigo-500/5 blur-[150px] rounded-full pointer-events-none"></div>
 
             <div className="max-w-3xl mx-auto relative z-10">
-                
                 <div className="h-6 mb-6 flex items-center">
                     {showBackButton && (
                         <button 
@@ -342,7 +320,7 @@ export default function PublicVerification() {
                                 </div>
                             </div>
 
-                            {/* SECURE LIVE PREVIEW PLAYBACK AREA */}
+                            {/* SECURE LIVE PREVIEW — clean/unstamped */}
                             {selectedDoc && (
                                 <div className="space-y-4 mb-8">
                                     <div className="flex items-center justify-between text-[9px] font-bold text-slate-500 tracking-wider">
@@ -402,28 +380,34 @@ export default function PublicVerification() {
                                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                             <button 
                                                 type="button"
-                                                disabled={!downloadConfirmed || isDecrypting}
+                                                disabled={!downloadConfirmed || isDecrypting || isDownloading}
                                                 onClick={() => triggerFileDownload(selectedDoc)}
                                                 className={`flex items-center justify-center gap-2.5 py-4 px-4 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${
-                                                    downloadConfirmed && !isDecrypting
+                                                    downloadConfirmed && !isDecrypting && !isDownloading
                                                         ? 'bg-linear-to-r from-cyan-500 to-indigo-600 text-white hover:opacity-90 shadow-lg shadow-indigo-950/40 cursor-pointer active:translate-y-px' 
                                                         : 'bg-slate-900 text-slate-600 border border-slate-800 cursor-not-allowed opacity-50'
                                                 }`}
                                             >
-                                                <Download size={14} /> EXPORT_SELECTED_ASSET
+                                                {isDownloading 
+                                                    ? <><Loader2 size={14} className="animate-spin" /> STAMPING...</>
+                                                    : <><Download size={14} /> EXPORT_SELECTED_ASSET</>
+                                                }
                                             </button>
 
                                             <button 
                                                 type="button"
-                                                disabled={!downloadConfirmed}
+                                                disabled={!downloadConfirmed || isDownloading}
                                                 onClick={handleDownloadAll}
                                                 className={`flex items-center justify-center gap-2.5 py-4 px-4 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${
-                                                    downloadConfirmed 
+                                                    downloadConfirmed && !isDownloading
                                                         ? 'bg-slate-800 border border-indigo-500/40 text-indigo-300 hover:bg-slate-700/80 cursor-pointer active:translate-y-px' 
                                                         : 'bg-slate-900 text-slate-600 border border-slate-800 cursor-not-allowed opacity-50'
                                                 }`}
                                             >
-                                                <Layers size={14} /> EXPORT_ALL_ASSETS_BATCH
+                                                {isDownloading
+                                                    ? <><Loader2 size={14} className="animate-spin" /> PROCESSING...</>
+                                                    : <><Layers size={14} /> EXPORT_ALL_ASSETS_BATCH</>
+                                                }
                                             </button>
                                         </div>
                                     </div>
@@ -443,7 +427,7 @@ export default function PublicVerification() {
                                         </p>
                                     </div>
                                     {blockchainData?.tx && (
-                                        <a
+                                        <a 
                                             href={`${import.meta.env.VITE_ARB_EXPLORER_URL}${blockchainData.tx}`}
                                             target="_blank"
                                             rel="noreferrer"
@@ -464,7 +448,6 @@ export default function PublicVerification() {
                         </div>
                         <h2 className="text-xl font-black text-white uppercase tracking-widest">[ SECURITY_ALERT: CRITICAL ]</h2>
                         <p className="text-rose-400/80 text-[10px] uppercase font-bold tracking-wider mt-1">VERIFICATION_FAILED_OR_TAMPERED</p>
-                        
                         <p className="text-slate-400 text-xs leading-relaxed max-w-md mx-auto mt-6 font-sans">
                             This asset lookup request failed on-chain signature cross-examination. Either data parameters have changed locally, or the cryptographic certificate signature route has missing registration tracks inside the active block scope.
                         </p>

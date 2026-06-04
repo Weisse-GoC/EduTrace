@@ -139,7 +139,7 @@ export const issueCredential = async ({
             file_url: fileUrl,
             blockchain_hash: blockchainHash,
             tx_hash: txHash,
-            status: 'Verified'
+            status: 'Verified'||'To_be_Issued' // Initial status before final approval
         }])
         .select()
         .single();
