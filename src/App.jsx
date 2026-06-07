@@ -78,7 +78,7 @@ export default function App() {
             <Route path="upload" element={<ApplicationForm />} /> 
             <Route path="qr-generate/:application_id" element={<QrGenerator />} /> 
             <Route path="profile" element={<StudentProfile />} />
-            <Route path="credential/:credentialId" element={<ViewCredential />} />
+            <Route path="view-credential" element={<ViewCredential />} />
             <Route path="notifications" element={<NotificationPage />} />
             <Route path="settings" element={<Settings />} />
           </Route>
