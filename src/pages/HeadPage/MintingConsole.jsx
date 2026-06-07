@@ -74,12 +74,10 @@ export default function MintingConsole() {
 
             // 2. Call your Supabase Edge Function GET endpoint
             const response = await fetch(
-                `${supabase.supabaseUrl}/functions/v1/ipfs-upload?cid=${doc.cid}`, 
+                `${supabase.supabaseUrl}/functions/v1/ipfs-upload?cid=${doc.cid}&raw=true`,
                 {
                     method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    headers: { 'Authorization': `Bearer ${token}` }
                 }
             );
 
