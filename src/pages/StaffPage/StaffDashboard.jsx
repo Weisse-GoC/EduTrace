@@ -5,7 +5,7 @@ import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus';
 import { 
     Search, Loader2, AlertCircle, Users, 
     Clock, CheckCircle, LayoutGrid, 
-    Filter, RefreshCw
+    Filter, RefreshCw, XCircle, FileText 
 } from 'lucide-react';
 import StaffRequestCard from './StaffRequestCard'; 
 
@@ -33,7 +33,8 @@ export default function StaffDashboard() {
         pending: requests.filter(r => r.status === 'Pending').length,
         verified: requests.filter(r => r.status === 'Verified').length,
         issued: requests.filter(r => ['Minted', 'Issued', 'L1_Issued'].includes(r.status)).length,
-        rejected: requests.filter(r => r.status === 'Rejected').length
+        rejected: requests.filter(r => r.status === 'Rejected').length,
+        to_be_issued: requests.filter(r => r.status === 'To_be_Issued').length  
     }), [requests]);
 
     const fetchRequests = useCallback(async (silent = false) => {
@@ -330,7 +331,9 @@ export default function StaffDashboard() {
         const name = (req.student_records?.full_name || req.student_name || "").toLowerCase();
         const sid = (req.student_records?.student_id || req.student_id || "").toLowerCase();
         const matchesSearch = name.includes(searchLower) || sid.includes(searchLower);
-        const matchesStatus = statusFilter === "All" || req.status === statusFilter;
+        const matchesStatus = statusFilter === "All"  || (statusFilter === "Processed" 
+        ? ['Minted', 'Issued', 'L1_Issued'].includes(req.status) 
+        : req.status === statusFilter);
         return matchesSearch && matchesStatus;
     });
 
@@ -378,7 +381,7 @@ export default function StaffDashboard() {
                 </div>
 
                 <div className="flex bg-white p-1.5 rounded-4xl shadow-sm border border-slate-100 overflow-x-auto">
-                    {["All", "Pending", "Verified", "To_be_Issued", "Rejected"].map((tab) => (
+                    {["All", "Pending", "Verified", "To_be_Issued", "Rejected", "Processed"].map((tab) => (
                         <button
                             key={tab}
                             onClick={() => setStatusFilter(tab)}
@@ -395,11 +398,24 @@ export default function StaffDashboard() {
             </div>
 
             {/* ── Stat cards ───────────────────────────────────────────────── */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-                <StatCard label="Total Workload"   value={stats.total}    icon={<Users size={20}/>}       color="indigo" />
-                <StatCard label="Awaiting Review"  value={stats.pending}  icon={<Clock size={20}/>}       color="amber" />
-                <StatCard label="Ready for Head"   value={stats.verified} icon={<CheckCircle size={20}/>} color="emerald" />
-                <StatCard label="Processed"        value={stats.issued}   icon={<LayoutGrid size={20}/>}  color="slate" />
+            <div className="flex flex-wrap gap-2">
+            {[
+                { label: "Total workload",  value: stats.total,         color: "#7F77DD", delay: "0s" },
+                { label: "Awaiting review", value: stats.pending,       color: "#EF9F27", delay: "0.3s" },
+                { label: "Ready for head",  value: stats.verified,      color: "#1D9E75", delay: "0.6s" },
+                { label: "To be issued",    value: stats.to_be_issued,  color: "#378ADD", delay: "0.9s" },
+                { label: "Processed",       value: stats.issued,        color: "#2C2C2A", delay: "1.2s" },
+                { label: "Rejected",        value: stats.rejected,      color: "#E24B4A", delay: "1.5s" },
+            ].map(({ label, value, color, delay }) => (
+                <div key={label} className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-100 bg-white text-sm font-bold whitespace-nowrap">
+                <span
+                    className="w-2 h-2 rounded-full shrink-0 animate-pulse"
+                    style={{ backgroundColor: color, animationDelay: delay }}
+                />
+                <span className="text-slate-700 text-xs uppercase tracking-wide">{label}</span>
+                <span className="text-slate-400 text-xs">{value}</span>
+                </div>
+            ))}
             </div>
 
             {/* ── Error banner ─────────────────────────────────────────────── */}
@@ -452,25 +468,6 @@ export default function StaffDashboard() {
                     ))
                 )}
             </div>
-        </div>
-    );
-}
-
-function StatCard({ icon, label, value, color }) {
-    const colors = {
-        indigo:  "bg-indigo-600 shadow-indigo-100",
-        amber:   "bg-amber-500 shadow-amber-100",
-        emerald: "bg-emerald-500 shadow-emerald-100",
-        slate:   "bg-slate-900 shadow-slate-100"
-    };
-
-    return (
-        <div className="bg-white p-8 rounded-[2.5rem] border border-slate-50 shadow-sm hover:shadow-md transition-shadow">
-            <div className={`${colors[color]} w-12 h-12 rounded-2xl flex items-center justify-center text-white mb-4 shadow-lg`}>
-                {icon}
-            </div>
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{label}</p>
-            <p className="text-4xl font-black text-slate-900 mt-1">{value}</p>
         </div>
     );
 }
