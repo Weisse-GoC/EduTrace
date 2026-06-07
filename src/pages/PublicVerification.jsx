@@ -1,40 +1,38 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom'; 
-import { supabase } from '../services/supabaseClient'; 
+import { useParams, useNavigate } from 'react-router-dom';
+import { supabase } from '../services/supabaseClient';
 import { ethers } from 'ethers';
 import { CONTRACT_ADDRESS, CONTRACT_ABI } from '../blockchain/config';
-import { 
-    ShieldCheck, 
-    ShieldAlert, 
-    Loader2, 
-    ExternalLink, 
-    GraduationCap, 
-    Building2, 
-    Calendar, 
-    Download, 
+import {
+    ShieldCheck,
+    ShieldAlert,
+    Loader2,
+    ExternalLink,
+    GraduationCap,
+    Building2,
+    Calendar,
+    Download,
     Lock,
     ArrowLeft,
-    Layers
+    Layers,
+    Hash,
 } from 'lucide-react';
 
 export default function PublicVerification() {
-    const { id } = useParams(); 
-    const navigate = useNavigate(); 
-    const [status, setStatus] = useState('loading'); 
+    const { id } = useParams();
+    const navigate = useNavigate();
+    const [status, setStatus] = useState('loading');
     const [docData, setDocData] = useState(null);
-    const [documents, setDocuments] = useState([]); 
-    const [selectedDoc, setSelectedDoc] = useState(null); 
+    const [documents, setDocuments] = useState([]);
+    const [selectedDoc, setSelectedDoc] = useState(null);
     const [blockchainData, setBlockchainData] = useState(null);
-    const [showBackButton, setShowBackButton] = useState(false); 
+    const [showBackButton, setShowBackButton] = useState(false);
     const [downloadConfirmed, setDownloadConfirmed] = useState(false);
     const [isDownloading, setIsDownloading] = useState(false);
-
-    // --- SECURE LIVE STREAMING & CACHE STATE ---
-    const [decryptedUrls, setDecryptedUrls] = useState({}); 
+    const [decryptedUrls, setDecryptedUrls] = useState({});
     const [isDecrypting, setIsDecrypting] = useState(false);
-    
-    const urlsRef = useRef({});
 
+    const urlsRef = useRef({});
     const currentDecryptedUrl = selectedDoc ? decryptedUrls[selectedDoc.cid] : null;
 
     const parseCustomIpfsBundle = (ipfsCid) => {
@@ -48,11 +46,11 @@ export default function PublicVerification() {
                 const cid = cleanItem.substring(colonIndex + 1).trim();
                 if (name && cid) return { name, cid };
             }
-            return { name: "System Verified Asset", cid: cleanItem };
+            return { name: 'System Verified Asset', cid: cleanItem };
         }).filter(doc => doc.cid.length > 0);
     };
 
-    // 1. Initial Cryptographic Verification
+    // 1. Cryptographic verification
     useEffect(() => {
         const dynamicHistory = window.history.state?.idx > 0;
         const internalReferrer = document.referrer.includes(window.location.host);
@@ -64,12 +62,9 @@ export default function PublicVerification() {
                     .from('credentials')
                     .select('*')
                     .eq('application_id', id)
-                    .maybeSingle(); 
+                    .maybeSingle();
 
-                if (error || !data) {
-                    setStatus('failed');
-                    return;
-                }
+                if (error || !data) { setStatus('failed'); return; }
 
                 setDocData(data);
                 const parsedList = parseCustomIpfsBundle(data.ipfs_cid || data.file_url);
@@ -87,7 +82,7 @@ export default function PublicVerification() {
                     setStatus('failed');
                 }
             } catch (error) {
-                console.error("Verification Error:", error);
+                console.error('Verification Error:', error);
                 setStatus('failed');
             }
         };
@@ -95,23 +90,21 @@ export default function PublicVerification() {
         if (id) verifyDocument();
     }, [id]);
 
-    // 2. Master unmount cleanup
+    // 2. Cleanup
     useEffect(() => {
         return () => {
-            Object.values(urlsRef.current).forEach(url => {
-                if (url) URL.revokeObjectURL(url);
-            });
+            Object.values(urlsRef.current).forEach(url => { if (url) URL.revokeObjectURL(url); });
         };
     }, []);
 
-    // 3. Secure Live Preview Streamer (clean, unstamped)
+    // 3. Preview streamer — GET now passes applicationId so backend bakes QR + notice
     useEffect(() => {
         if (!selectedDoc) return;
         if (urlsRef.current[selectedDoc.cid]) {
             setIsDecrypting(false);
             return;
         }
-        
+
         let active = true;
 
         const fetchDecryptedAsset = async () => {
@@ -119,7 +112,7 @@ export default function PublicVerification() {
             try {
                 const { data: { session } } = await supabase.auth.getSession();
                 const response = await fetch(
-                    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ipfs-upload?cid=${selectedDoc.cid}`,
+                    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ipfs-upload?cid=${selectedDoc.cid}&applicationId=${id}`,
                     {
                         method: 'GET',
                         headers: {
@@ -128,16 +121,16 @@ export default function PublicVerification() {
                     }
                 );
 
-                if (!response.ok) throw new Error("Decryption function failed");
+                if (!response.ok) throw new Error('Decryption function failed');
                 const blob = await response.blob();
-                
+
                 if (active) {
                     const localUrl = URL.createObjectURL(blob);
                     urlsRef.current[selectedDoc.cid] = localUrl;
                     setDecryptedUrls(prev => ({ ...prev, [selectedDoc.cid]: localUrl }));
                 }
             } catch (error) {
-                console.error("Error decrypting document for live view:", error);
+                console.error('Error decrypting document for live view:', error);
             } finally {
                 if (active) setIsDecrypting(false);
             }
@@ -145,19 +138,16 @@ export default function PublicVerification() {
 
         fetchDecryptedAsset();
         return () => { active = false; };
-    }, [selectedDoc]); 
+    }, [selectedDoc]);
 
-    const isImageAsset = (name) =>
-        name ? /\.(jpeg|jpg|gif|png|webp|avif)$/i.test(name) : false;
+    const isImageAsset = (name) => name ? /\.(jpeg|jpg|gif|png|webp|avif)$/i.test(name) : false;
 
-    // 4. Stamped Download Pipeline — calls stamp-pdf edge function
+    // 4. Stamped download
     const triggerFileDownload = async (doc) => {
         if (!doc || !docData) return;
         setIsDownloading(true);
-
         try {
             const { data: { session } } = await supabase.auth.getSession();
-
             const response = await fetch(
                 `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stamp-pdf`,
                 {
@@ -168,28 +158,24 @@ export default function PublicVerification() {
                     },
                     body: JSON.stringify({
                         cid: doc.cid,
-                        docStatus: docData.status,   // "L1_Issued" | "Issued"
-                        applicationId: id,            // for QR URL generation
+                        docStatus: docData.status,
+                        applicationId: id,
                     }),
                 }
             );
 
-            if (!response.ok) throw new Error("Stamp pipeline failed");
-
+            if (!response.ok) throw new Error('Stamp pipeline failed');
             const blob = await response.blob();
             const stampedUrl = URL.createObjectURL(blob);
-
             const link = document.createElement('a');
             link.href = stampedUrl;
             link.download = `Verified-${doc.name.replace(/\s+/g, '-')}-${id?.substring(0, 6)}.pdf`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-
             setTimeout(() => URL.revokeObjectURL(stampedUrl), 5000);
-
         } catch (err) {
-            console.error("Download stamping failed:", err);
+            console.error('Download stamping failed:', err);
         } finally {
             setIsDownloading(false);
         }
@@ -203,267 +189,339 @@ export default function PublicVerification() {
         }
     };
 
+    // ── LOADING ───────────────────────────────────────────────────────────────
     if (status === 'loading') {
         return (
-            <div className="min-h-screen flex flex-col items-center justify-center bg-[#030712] p-6 font-mono selection:bg-cyan-500/20 selection:text-cyan-400">
-                <div className="relative mb-8">
-                    <div className="absolute inset-0 bg-cyan-500/20 rounded-full blur-3xl animate-pulse"></div>
-                    <Loader2 className="animate-spin text-cyan-400 relative z-10" size={64} />
+            <div className="min-h-screen flex flex-col items-center justify-center bg-[#0d1117] p-6">
+                <div className="relative mb-6">
+                    <Loader2 className="animate-spin text-teal-400/80" size={44} strokeWidth={1.5} />
                 </div>
-                <h3 className="text-xl font-black text-white uppercase tracking-widest mb-2">[ RUNNING INTEGRITY_CHECK ]</h3>
-                <p className="text-cyan-500/60 font-bold uppercase tracking-[0.2em] text-[10px]">Querying Arbitrum L2 Ledger Pipeline...</p>
+                <p className="text-[11px] font-mono font-bold text-slate-400 uppercase tracking-[0.3em]">
+                    Querying integrity ledger…
+                </p>
             </div>
         );
     }
 
+    // ── MAIN ──────────────────────────────────────────────────────────────────
     return (
-        <div className="min-h-screen bg-[#030712] text-slate-100 py-16 px-4 font-mono relative overflow-hidden selection:bg-indigo-500/30 selection:text-indigo-200">
-            <div className="absolute inset-0 bg-[linear-gradient(to_right,#1f293710_1px,transparent_1px),linear-gradient(to_bottom,#1f293710_1px,transparent_1px)] bg-size-[4rem_4rem] pointer-events-none"></div>
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-250 h-75 bg-indigo-500/5 blur-[150px] rounded-full pointer-events-none"></div>
+        <div className="min-h-screen bg-[#0d1117] text-slate-300 font-mono relative overflow-hidden">
 
-            <div className="max-w-3xl mx-auto relative z-10">
-                <div className="h-6 mb-6 flex items-center">
+            {/* Subtle grid background */}
+            <div
+                className="absolute inset-0 pointer-events-none"
+                style={{
+                    backgroundImage: `
+                        linear-gradient(rgba(148,163,184,0.03) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(148,163,184,0.03) 1px, transparent 1px)
+                    `,
+                    backgroundSize: '48px 48px',
+                }}
+            />
+
+            {/* Top accent line */}
+            <div className="absolute top-0 left-0 right-0 h-px bg-linear-to-r from-transparent via-teal-500/40 to-transparent" />
+
+            <div className="relative z-10 max-w-2xl mx-auto px-4 py-12">
+
+                {/* Back button */}
+                <div className="h-8 mb-8 flex items-center">
                     {showBackButton && (
-                        <button 
+                        <button
                             onClick={() => navigate(-1)}
-                            className="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-cyan-400 border border-transparent hover:border-cyan-500/20 hover:bg-cyan-950/30 px-3 py-1.5 rounded-md transition-all group"
+                            className="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-teal-400 transition-colors group"
                         >
-                            <ArrowLeft size={12} className="group-hover:-translate-x-0.5 transition-transform text-cyan-400" /> SYS://RETURN_TO_CONSOLE
+                            <ArrowLeft size={11} className="group-hover:-translate-x-0.5 transition-transform" />
+                            Return
                         </button>
                     )}
                 </div>
 
-                <div className="text-center mb-12 border-b border-slate-800 pb-8 relative">
-                    <div className="absolute bottom-0 left-0 w-8 h-px bg-cyan-500"></div>
-                    <div className="absolute bottom-0 right-0 w-8 h-px bg-indigo-500"></div>
-                    
-                    <div className="inline-flex items-center gap-2 bg-slate-900/80 backdrop-blur-md px-4 py-1.5 rounded-full border border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.1)] mb-6">
-                        <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping"></div>
-                        <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-400">NET_NODE: ACTIVE_SECURE</span>
+                {/* Header */}
+                <div className="mb-10 pb-8 border-b border-slate-800">
+                    <div className="flex items-center gap-2 mb-4">
+                        <div className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
+                        <span className="text-[9px] font-bold uppercase tracking-[0.3em] text-teal-400/70">
+                            Node active · Arbitrum L2
+                        </span>
                     </div>
-                    <h1 className="text-3xl font-black tracking-widest text-white uppercase italic">
-                        EDUTRACE // <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-500 font-sans tracking-normal font-black">VERIFY.sys</span>
+                    <h1 className="text-2xl font-black uppercase tracking-tight text-slate-100">
+                        EduTrace
+                        <span className="text-teal-400 font-light"> / </span>
+                        <span className="text-slate-400 font-normal text-xl">verify</span>
                     </h1>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.3em] mt-2">SECURE CRYPTOGRAPHIC LEDGER READOUT</p>
+                    <p className="text-[10px] text-slate-600 uppercase tracking-[0.25em] mt-1.5">
+                        Cryptographic credential verification system
+                    </p>
                 </div>
 
+                {/* ── VERIFIED ─────────────────────────────────────────── */}
                 {status === 'verified' ? (
-                    <div className="space-y-6">
-                        <div className="bg-slate-900/60 backdrop-blur-xl rounded-4xl p-6 md:p-10 border border-indigo-500/20 shadow-[0_0_50px_-12px_rgba(99,102,241,0.15)] relative overflow-hidden">
-                            <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-bl-full pointer-events-none"></div>
-                            
-                            <div className="flex flex-col items-center text-center mb-10 border-b border-slate-800/60 pb-8">
-                                <div className="w-16 h-16 bg-emerald-950/40 border border-emerald-500/40 rounded-2xl flex items-center justify-center text-emerald-400 mb-4 shadow-[0_0_20px_rgba(16,185,129,0.15)]">
-                                    <ShieldCheck size={36} strokeWidth={2} />
-                                </div>
-                                <h2 className="text-2xl font-black text-white uppercase tracking-wider">INTEGRITY_PASSED</h2>
-                                <p className="text-emerald-400 text-[9px] font-bold uppercase tracking-[0.25em] mt-2 flex items-center gap-1.5">
-                                    <Lock size={10} /> RECORD MATCHES ARBITRUM L2 ROOT HASH
+                    <div className="space-y-5">
+
+                        {/* Status badge */}
+                        <div className="flex items-center gap-4 p-5 bg-emerald-950/20 border border-emerald-800/30 rounded-2xl">
+                            <div className="w-10 h-10 rounded-xl bg-emerald-950/60 border border-emerald-700/40 flex items-center justify-center shrink-0">
+                                <ShieldCheck size={20} className="text-emerald-400" strokeWidth={2} />
+                            </div>
+                            <div>
+                                <p className="text-emerald-400 text-sm font-black uppercase tracking-wider">Integrity passed</p>
+                                <p className="text-emerald-700 text-[9px] font-bold uppercase tracking-widest mt-0.5 flex items-center gap-1">
+                                    <Lock size={8} /> Record matches on-chain root hash
                                 </p>
                             </div>
+                        </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-950/50 p-6 rounded-2xl border border-slate-800/80 mb-8">
-                                <div className="space-y-1.5">
-                                    <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">// IDENTITY_TARGET</p>
-                                    <div className="text-white font-bold text-base tracking-wide font-sans">{docData?.student_name}</div>
-                                </div>
-                                <div className="space-y-1.5">
-                                    <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">// ISSUING_AUTHORITY</p>
-                                    <div className="flex items-center gap-2 text-slate-300 font-bold text-sm font-sans">
-                                        <Building2 size={14} className="text-indigo-400" />
-                                        University of the Cordilleras
-                                    </div>
-                                </div>
-                                <div className="space-y-1.5">
-                                    <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">// BUNDLE_CONTAINS</p>
-                                    <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs uppercase tracking-wider">
-                                        <GraduationCap size={14} className="text-cyan-400" />
-                                        {documents.length} Secure Asset File(s)
-                                    </div>
-                                </div>
-                                <div className="space-y-1.5">
-                                    <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">// TIMESTAMP_RECORDED</p>
-                                    <div className="flex items-center gap-2 text-slate-300 font-bold text-xs">
-                                        <Calendar size={14} className="text-indigo-400" />
-                                        {docData?.issued_at ? new Date(docData.issued_at).toLocaleDateString(undefined, { dateStyle: 'long' }) : 'N/A'}
-                                    </div>
-                                </div>
-                            </div>
+                        {/* Credential info */}
+                        <div className="bg-slate-900/50 border border-slate-800/60 rounded-2xl p-5 grid grid-cols-2 gap-5">
+                            <InfoField
+                                label="Identity target"
+                                value={docData?.student_name}
+                                full
+                            />
+                            <InfoField
+                                label="Issuing authority"
+                                value="University of the Cordilleras"
+                                icon={<Building2 size={11} className="text-slate-500" />}
+                            />
+                            <InfoField
+                                label="Bundle assets"
+                                value={`${documents.length} file(s)`}
+                                icon={<GraduationCap size={11} className="text-slate-500" />}
+                            />
+                            <InfoField
+                                label="Timestamp"
+                                value={docData?.issued_at
+                                    ? new Date(docData.issued_at).toLocaleDateString(undefined, { dateStyle: 'medium' })
+                                    : 'N/A'}
+                                icon={<Calendar size={11} className="text-slate-500" />}
+                            />
+                        </div>
 
-                            <div className="mb-8 space-y-3">
-                                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">// SELECT ARCHIVE TARGET RESOURCE</p>
-                                <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-1">
+                        {/* Document selector */}
+                        {documents.length > 1 && (
+                            <div className="space-y-2">
+                                <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest px-1">
+                                    Select asset
+                                </p>
+                                <div className="space-y-1.5 max-h-36 overflow-y-auto">
                                     {documents.map((doc) => {
                                         const isCurrent = selectedDoc?.name === doc.name;
                                         return (
                                             <button
                                                 key={doc.name}
                                                 type="button"
-                                                onClick={() => {
-                                                    setSelectedDoc(doc);
-                                                    setDownloadConfirmed(false); 
-                                                }}
-                                                className={`w-full flex items-center justify-between p-3.5 px-5 rounded-xl border text-left text-xs uppercase tracking-wider transition-all ${
-                                                    isCurrent 
-                                                        ? 'bg-linear-to-r from-indigo-950/50 to-slate-900 border-indigo-500/60 text-white shadow-[0_0_15px_rgba(99,102,241,0.1)]' 
-                                                        : 'bg-slate-950/30 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                                                onClick={() => { setSelectedDoc(doc); setDownloadConfirmed(false); }}
+                                                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border text-left text-[11px] transition-all ${
+                                                    isCurrent
+                                                        ? 'bg-teal-950/30 border-teal-700/50 text-teal-300'
+                                                        : 'bg-slate-900/40 border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700'
                                                 }`}
                                             >
-                                                <span className="truncate max-w-[80%] font-bold">{doc.name}</span>
-                                                <div className="flex items-center gap-3 shrink-0 text-[9px] font-mono tracking-widest">
-                                                    {isCurrent && <span className="text-cyan-400 font-bold text-[8px] bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-500/30">STREAM_MOUNTED</span>}
-                                                    <span className="text-slate-600">{doc.cid.substring(0, 6)}...</span>
+                                                <span className="font-bold uppercase tracking-wide truncate max-w-[75%]">{doc.name}</span>
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    {isCurrent && (
+                                                        <span className="text-[8px] font-bold text-teal-500 bg-teal-950/60 px-2 py-0.5 rounded border border-teal-800/40 uppercase tracking-wider">
+                                                            Active
+                                                        </span>
+                                                    )}
+                                                    <span className="text-slate-700 text-[9px] font-mono">{doc.cid.substring(0, 8)}…</span>
                                                 </div>
                                             </button>
                                         );
                                     })}
                                 </div>
                             </div>
+                        )}
 
-                            {/* SECURE LIVE PREVIEW — clean/unstamped */}
-                            {selectedDoc && (
-                                <div className="space-y-4 mb-8">
-                                    <div className="flex items-center justify-between text-[9px] font-bold text-slate-500 tracking-wider">
-                                        <p className="uppercase">SANDBOX://PREVIEWING: {selectedDoc.name}</p>
-                                        <a 
-                                            href={currentDecryptedUrl || '#'} 
-                                            target="_blank" 
-                                            rel="noopener noreferrer"
-                                            className={`flex items-center gap-1 hover:underline ${currentDecryptedUrl ? 'text-cyan-400' : 'text-slate-600 cursor-not-allowed pointer-events-none'}`}
-                                        >
-                                            SECURE_DECRYPTED_LINK <ExternalLink size={10} />
-                                        </a>
-                                    </div>
-                                    
-                                    <div className="w-full h-110 bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 shadow-inner relative flex items-center justify-center p-1">
-                                        {isDecrypting ? (
-                                            <div className="flex flex-col items-center gap-4 text-cyan-400">
-                                                <Loader2 className="animate-spin" size={40} />
-                                                <span className="text-[10px] uppercase tracking-widest font-bold animate-pulse">Decrypting Secure Asset...</span>
-                                            </div>
-                                        ) : !currentDecryptedUrl ? (
-                                            <span className="text-slate-600 text-xs uppercase tracking-widest">Failed to load payload stream</span>
-                                        ) : isImageAsset(selectedDoc.name) ? (
-                                            <img 
-                                                src={currentDecryptedUrl} 
-                                                alt="Decoded Ledger View Frame" 
-                                                className="w-full h-full object-contain bg-slate-950 rounded-xl"
-                                                loading="lazy"
-                                            />
-                                        ) : (
-                                            <iframe 
-                                                src={`${currentDecryptedUrl}#toolbar=0`} 
-                                                title="Ledger Document Preview Matrix" 
-                                                className="w-full h-full border-none rounded-xl bg-white invert-[0.88] hue-rotate-180" 
-                                            />
-                                        )}
-                                    </div>
+                        {/* Live preview */}
+                        {selectedDoc && (
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between px-1">
+                                    <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest">
+                                        Preview · {selectedDoc.name}
+                                    </p>
+                                    <a
+                                        href={currentDecryptedUrl || '#'}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={`flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${
+                                            currentDecryptedUrl
+                                                ? 'text-teal-500 hover:text-teal-300'
+                                                : 'text-slate-700 pointer-events-none'
+                                        }`}
+                                    >
+                                        Open <ExternalLink size={9} />
+                                    </a>
+                                </div>
 
-                                    <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 space-y-4">
-                                        <label className="flex items-start gap-3 cursor-pointer group select-none">
-                                            <div className="relative mt-0.5 shrink-0">
-                                                <input 
-                                                    type="checkbox" 
-                                                    checked={downloadConfirmed}
-                                                    onChange={(e) => setDownloadConfirmed(e.target.checked)}
-                                                    className="sr-only peer"
-                                                />
-                                                <div className="w-4 h-4 bg-slate-900 border border-slate-700 peer-checked:border-cyan-400 rounded transition-all flex items-center justify-center peer-checked:bg-cyan-950/60">
-                                                    <div className="w-1.5 h-1.5 bg-cyan-400 rounded-sm scale-0 peer-checked:scale-100 transition-transform"></div>
-                                                </div>
-                                            </div>
-                                            <span className="text-[10px] leading-tight font-bold text-slate-400 group-hover:text-slate-300 uppercase tracking-wide">
-                                                I confirm downloading this decrypted asset copy. I recognize it contains cryptographic verification stamps linking back to hash record {selectedDoc.cid.substring(0,8)}.
+                                {/* Preview frame */}
+                                <div className="w-full h-120 bg-[#080c10] rounded-2xl border border-slate-800/60 overflow-hidden relative flex items-center justify-center">
+                                    {isDecrypting ? (
+                                        <div className="flex flex-col items-center gap-3 text-slate-500">
+                                            <Loader2 className="animate-spin text-teal-400/60" size={32} strokeWidth={1.5} />
+                                            <span className="text-[10px] uppercase tracking-widest font-bold animate-pulse">
+                                                Decrypting…
                                             </span>
-                                        </label>
-
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                            <button 
-                                                type="button"
-                                                disabled={!downloadConfirmed || isDecrypting || isDownloading}
-                                                onClick={() => triggerFileDownload(selectedDoc)}
-                                                className={`flex items-center justify-center gap-2.5 py-4 px-4 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${
-                                                    downloadConfirmed && !isDecrypting && !isDownloading
-                                                        ? 'bg-linear-to-r from-cyan-500 to-indigo-600 text-white hover:opacity-90 shadow-lg shadow-indigo-950/40 cursor-pointer active:translate-y-px' 
-                                                        : 'bg-slate-900 text-slate-600 border border-slate-800 cursor-not-allowed opacity-50'
-                                                }`}
-                                            >
-                                                {isDownloading 
-                                                    ? <><Loader2 size={14} className="animate-spin" /> STAMPING...</>
-                                                    : <><Download size={14} /> EXPORT_SELECTED_ASSET</>
-                                                }
-                                            </button>
-
-                                            <button 
-                                                type="button"
-                                                disabled={!downloadConfirmed || isDownloading}
-                                                onClick={handleDownloadAll}
-                                                className={`flex items-center justify-center gap-2.5 py-4 px-4 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${
-                                                    downloadConfirmed && !isDownloading
-                                                        ? 'bg-slate-800 border border-indigo-500/40 text-indigo-300 hover:bg-slate-700/80 cursor-pointer active:translate-y-px' 
-                                                        : 'bg-slate-900 text-slate-600 border border-slate-800 cursor-not-allowed opacity-50'
-                                                }`}
-                                            >
-                                                {isDownloading
-                                                    ? <><Loader2 size={14} className="animate-spin" /> PROCESSING...</>
-                                                    : <><Layers size={14} /> EXPORT_ALL_ASSETS_BATCH</>
-                                                }
-                                            </button>
                                         </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            <div className="bg-slate-950/80 rounded-2xl p-5 border border-slate-800/80">
-                                <div className="flex items-center justify-between mb-4">
-                                    <h3 className="text-[9px] font-bold uppercase tracking-widest text-slate-500">// ON-CHAIN_PROOF</h3>
-                                    <span className="bg-indigo-950/60 text-indigo-400 border border-indigo-500/30 text-[8px] font-bold px-2.5 py-0.5 rounded-md uppercase tracking-wider">ARB_SEPOLIA_TESTNET</span>
-                                </div>
-                                <div className="space-y-4">
-                                    <div>
-                                        <p className="text-[7px] text-slate-500 uppercase font-bold mb-1 opacity-80">VERIFICATION_HASH_ROOT (SHA-256)</p>
-                                        <p className="text-[9px] font-mono break-all text-cyan-400/90 leading-relaxed bg-slate-900/60 border border-slate-800 p-3.5 rounded-xl">
-                                            {blockchainData?.hash}
-                                        </p>
-                                    </div>
-                                    {blockchainData?.tx && (
-                                        <a 
-                                            href={`${import.meta.env.VITE_ARB_EXPLORER_URL}${blockchainData.tx}`}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest text-indigo-400 hover:text-indigo-300 transition-colors group"
-                                        >
-                                            EXPLORE_LEDGER_BLOCKTRANSACTION <ExternalLink size={10} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                                        </a>
+                                    ) : !currentDecryptedUrl ? (
+                                        <span className="text-slate-700 text-[11px] uppercase tracking-widest">
+                                            Failed to load stream
+                                        </span>
+                                    ) : isImageAsset(selectedDoc.name) ? (
+                                        <img
+                                            src={currentDecryptedUrl}
+                                            alt="Document preview"
+                                            className="w-full h-full object-contain"
+                                            loading="lazy"
+                                        />
+                                    ) : (
+                                        <iframe
+                                            src={`${currentDecryptedUrl}#toolbar=0`}
+                                            title="Document preview"
+                                            className="w-full h-full border-none"
+                                            style={{ background: '#fff' }}
+                                        />
                                     )}
                                 </div>
+
+                                {/* Download section */}
+                                <div className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-4 space-y-4">
+                                    {/* Confirmation checkbox */}
+                                    <label className="flex items-start gap-3 cursor-pointer group select-none">
+                                        <div className="relative mt-0.5 shrink-0">
+                                            <input
+                                                type="checkbox"
+                                                checked={downloadConfirmed}
+                                                onChange={(e) => setDownloadConfirmed(e.target.checked)}
+                                                className="sr-only peer"
+                                            />
+                                            <div className="w-4 h-4 bg-slate-950 border border-slate-700 peer-checked:border-teal-500/70 rounded transition-all flex items-center justify-center peer-checked:bg-teal-950/50">
+                                                <div className="w-1.5 h-1.5 bg-teal-400 rounded-sm scale-0 peer-checked:scale-100 transition-transform" />
+                                            </div>
+                                        </div>
+                                        <span className="text-[10px] leading-relaxed font-bold text-slate-500 group-hover:text-slate-400 uppercase tracking-wide">
+                                            I confirm this download. The exported file contains cryptographic stamps
+                                            linked to hash record <span className="text-slate-400 font-mono">{selectedDoc.cid.substring(0, 10)}…</span>
+                                        </span>
+                                    </label>
+
+                                    {/* Download buttons */}
+                                    <div className="grid grid-cols-2 gap-2.5">
+                                        <button
+                                            type="button"
+                                            disabled={!downloadConfirmed || isDecrypting || isDownloading}
+                                            onClick={() => triggerFileDownload(selectedDoc)}
+                                            className={`flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${
+                                                downloadConfirmed && !isDecrypting && !isDownloading
+                                                    ? 'bg-teal-500/10 border border-teal-500/30 text-teal-300 hover:bg-teal-500/20 hover:border-teal-400/50 cursor-pointer'
+                                                    : 'bg-slate-900/60 text-slate-700 border border-slate-800 cursor-not-allowed'
+                                            }`}
+                                        >
+                                            {isDownloading
+                                                ? <><Loader2 size={12} className="animate-spin" /> Stamping…</>
+                                                : <><Download size={12} /> Export selected</>
+                                            }
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            disabled={!downloadConfirmed || isDownloading}
+                                            onClick={handleDownloadAll}
+                                            className={`flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${
+                                                downloadConfirmed && !isDownloading
+                                                    ? 'bg-slate-800/60 border border-slate-700/50 text-slate-300 hover:bg-slate-700/60 cursor-pointer'
+                                                    : 'bg-slate-900/60 text-slate-700 border border-slate-800 cursor-not-allowed'
+                                            }`}
+                                        >
+                                            {isDownloading
+                                                ? <><Loader2 size={12} className="animate-spin" /> Processing…</>
+                                                : <><Layers size={12} /> Export all</>
+                                            }
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
+                        )}
+
+                        {/* On-chain proof */}
+                        <div className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-5 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
+                                    <Hash size={10} /> On-chain proof
+                                </p>
+                                <span className="text-[8px] font-bold text-slate-600 bg-slate-800/60 border border-slate-700/40 px-2 py-0.5 rounded uppercase tracking-wider">
+                                    Arb Sepolia
+                                </span>
+                            </div>
+
+                            <div>
+                                <p className="text-[8px] text-slate-600 uppercase tracking-widest mb-2 font-bold">
+                                    SHA-256 root hash
+                                </p>
+                                <p className="text-[9px] font-mono break-all text-teal-400/70 leading-relaxed bg-slate-950/60 border border-slate-800/60 p-3.5 rounded-xl">
+                                    {blockchainData?.hash}
+                                </p>
+                            </div>
+
+                            {blockchainData?.tx && (
+                                <a
+                                    href={`${import.meta.env.VITE_ARB_EXPLORER_URL}${blockchainData.tx}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest text-slate-500 hover:text-teal-400 transition-colors group"
+                                >
+                                    View block transaction
+                                    <ExternalLink size={9} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                                </a>
+                            )}
                         </div>
                     </div>
+
                 ) : (
-                    <div className="bg-slate-900/40 backdrop-blur-md rounded-4xl p-12 shadow-2xl border border-rose-500/30 shadow-rose-950/10 text-center relative overflow-hidden">
-                        <div className="absolute top-0 right-0 w-2 h-32 bg-rose-500/20 shadow-[0_0_20px_rgba(239,68,68,0.5)]"></div>
-                        <div className="w-16 h-16 bg-rose-950/30 border border-rose-500/40 rounded-2xl flex items-center justify-center text-rose-500 mx-auto mb-6 ring-1 ring-rose-900/20 shadow-inner shadow-rose-500/5">
-                            <ShieldAlert size={36} strokeWidth={2} />
+                    // ── FAILED ────────────────────────────────────────────
+                    <div className="bg-slate-900/40 border border-rose-900/40 rounded-2xl p-10 text-center space-y-5">
+                        <div className="w-12 h-12 bg-rose-950/40 border border-rose-800/40 rounded-xl flex items-center justify-center text-rose-500 mx-auto">
+                            <ShieldAlert size={24} strokeWidth={1.5} />
                         </div>
-                        <h2 className="text-xl font-black text-white uppercase tracking-widest">[ SECURITY_ALERT: CRITICAL ]</h2>
-                        <p className="text-rose-400/80 text-[10px] uppercase font-bold tracking-wider mt-1">VERIFICATION_FAILED_OR_TAMPERED</p>
-                        <p className="text-slate-400 text-xs leading-relaxed max-w-md mx-auto mt-6 font-sans">
-                            This asset lookup request failed on-chain signature cross-examination. Either data parameters have changed locally, or the cryptographic certificate signature route has missing registration tracks inside the active block scope.
+                        <div>
+                            <h2 className="text-base font-black text-slate-200 uppercase tracking-wider">Verification failed</h2>
+                            <p className="text-rose-500/70 text-[10px] uppercase font-bold tracking-wider mt-1">
+                                Record tampered or not found
+                            </p>
+                        </div>
+                        <p className="text-slate-500 text-xs leading-relaxed max-w-sm mx-auto font-sans">
+                            This credential could not be matched against the on-chain registry.
+                            The document may have been altered or the application ID is invalid.
                         </p>
-                        <button 
+                        <button
                             onClick={() => window.location.reload()}
-                            className="mt-8 text-[9px] font-bold uppercase tracking-widest text-slate-500 hover:text-cyan-400 border border-slate-800 hover:border-cyan-500/30 bg-slate-950/40 px-5 py-2.5 rounded-xl transition-all"
+                            className="text-[9px] font-bold uppercase tracking-widest text-slate-600 hover:text-teal-400 border border-slate-800 hover:border-teal-800/50 bg-slate-950/40 px-5 py-2.5 rounded-xl transition-all"
                         >
-                            SYS_RELOAD_LOOKUP_PIPELINE
+                            Retry lookup
                         </button>
                     </div>
                 )}
-            </div>
-            
-            <div className="mt-12 text-center pointer-events-none opacity-40">
-                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-[0.4em]">SYSTEM_EDUTRACE // LEDGER_CORE_v2.06_RELEASE</p>
+
+                {/* Footer */}
+                <div className="mt-12 pt-6 border-t border-slate-800/40 text-center">
+                    <p className="text-[9px] font-bold text-slate-700 uppercase tracking-[0.35em]">
+                        EduTrace · Ledger Core v2.06
+                    </p>
+                </div>
             </div>
         </div>
     );
 }
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+const InfoField = ({ label, value, icon, full }) => (
+    <div className={full ? 'col-span-2' : ''}>
+        <p className="text-[8px] font-bold text-slate-600 uppercase tracking-widest mb-1">{label}</p>
+        <div className="flex items-center gap-1.5">
+            {icon}
+            <span className="text-slate-300 text-[11px] font-bold tracking-wide">{value || '—'}</span>
+        </div>
+    </div>
+);
