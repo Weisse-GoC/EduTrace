@@ -178,7 +178,7 @@ export default function StudentLookup() {
                                                     <td className="p-6">
                                                         <button className="p-2 hover:bg-indigo-50 text-indigo-600 rounded-lg transition-colors">
                                                             <ExternalLink size={16}
-                                                                onClick={() => alert("View document functionality not implemented in this demo.")}
+                                                                onClick={() => window.open(`/verify/${req.application_id}`, '_blank')}
                                                             />
 
                                                         </button>
