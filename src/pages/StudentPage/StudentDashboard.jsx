@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { supabase, getCredentialsByRecipientId } from '../../services/supabaseClient';
+import { supabase, getCredentialsByRecipientId, getApplicationsByStudentId } from '../../services/supabaseClient';
 import { useAuth } from '../../hooks/useAuth';
-import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus'; // ◄ Imported Custom Hook
+import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus';
 import { 
-    Download, 
     Loader2, 
     Clock, 
     QrCode, 
@@ -11,7 +10,8 @@ import {
     ShieldCheck,
     FileSearch,
     Search,
-    Eye
+    Eye,
+    FileText
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom'; 
 import { ethers } from 'ethers';
@@ -20,18 +20,18 @@ import { CONTRACT_ADDRESS, CONTRACT_ABI, getReadOnlyProvider } from '../../block
 export default function StudentDashboard() {
     const { user } = useAuth();
     const [credentials, setCredentials] = useState([]);
+    const [pendingCount, setPendingCount] = useState(0); // ◄ just the count, not the full list
     const [loading, setLoading] = useState(true);
     const [showToast, setShowToast] = useState(null);
     const [searchTerm, setSearchTerm] = useState("");
     const navigate = useNavigate();
     const isMounted = useRef(true);
 
-    // Blockchain Verification Logic
+    // Verifies a credential hash against the smart contract
     const checkBlockchainStatus = useCallback(async (fileHash) => {
         if (!fileHash || fileHash === "PENDING" || !fileHash.startsWith("0x") || fileHash.length < 66) {
             return { isVerified: false };
         }
-
         try {
             const provider = getReadOnlyProvider();
             const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
@@ -44,7 +44,7 @@ export default function StudentDashboard() {
         }
     }, []);
 
-    // Background Blockchain Sync
+    // Enriches raw credential rows with on-chain verification status
     const processCredentials = useCallback(async (rawDocs) => {
         const enriched = rawDocs.map((d) => ({ ...d, isValidating: true }));
         if (isMounted.current) setCredentials(enriched);
@@ -61,20 +61,27 @@ export default function StudentDashboard() {
         if (isMounted.current) setCredentials(verifiedDocs);
     }, [checkBlockchainStatus]);
 
-    // FETCH METHOD (Strict guard check prevents GET undefined 400 Bad Request)
+    // Only fetches the count for the stat card — full list lives in ViewCredential
+    const fetchPendingCount = useCallback(async () => {
+        if (!user?.id) return;
+        try {
+            const data = await getApplicationsByStudentId(user.id);
+            if (isMounted.current) setPendingCount(data.length);
+        } catch (error) {
+            console.error("Pending Count Fetch Error:", error);
+        }
+    }, [user]);
+
+    // Guards against fetching before the auth session is ready
     const fetchCredentials = useCallback(async (silent = false) => {
-        if (!user || !user.id) {
+        if (!user?.id) {
             console.warn("Fetch blocked: User session context is not initialized yet.");
             return; 
         }
-        
         if (!silent && isMounted.current) setLoading(true);
-
         try {
             const data = await getCredentialsByRecipientId(user.id);
-            if (data && isMounted.current) {
-                await processCredentials(data);
-            }
+            if (data && isMounted.current) await processCredentials(data);
         } catch (error) {
             console.error("Credential Fetch Abstraction Error:", error);
             if (isMounted.current) setCredentials([]);
@@ -83,22 +90,23 @@ export default function StudentDashboard() {
         }
     }, [processCredentials, user]);
 
-    // 💡 Wrapper to trigger a silent background sync upon tab focus
+    // Runs silently on tab refocus so data stays fresh without a full reload
     const handleSilentRefresh = useCallback(() => {
         fetchCredentials(true);
-    }, [fetchCredentials]);
+        fetchPendingCount();
+    }, [fetchCredentials, fetchPendingCount]);
 
-    // ⚡ Active visibility listener ensuring immediate local ledger updates on refocus
     useRefreshOnFocus(handleSilentRefresh);
 
-    // Lifecycle Management
     useEffect(() => {
         isMounted.current = true;
         
         if (user?.id) {
             fetchCredentials();
+            fetchPendingCount();
 
-            const channel = supabase
+            // Listens for new issued credentials
+            const credChannel = supabase
                 .channel(`student_updates:${user.id}`)
                 .on('postgres_changes', { 
                     event: 'INSERT', 
@@ -111,14 +119,34 @@ export default function StudentDashboard() {
                 })
                 .subscribe();
 
+            // Listens for application status changes — updates the count badge only
+            const appChannel = supabase
+                .channel(`application_updates:${user.id}`)
+                .on('postgres_changes', {
+                    event: '*',
+                    schema: 'public',
+                    table: 'student_applications',
+                    filter: `user_id=eq.${user.id}`
+                }, (payload) => {
+                    if (payload.eventType === 'INSERT') {
+                        setShowToast(`Application Submitted: ${payload.new.document_type || 'Document Request'}`);
+                    }
+                    if (payload.eventType === 'UPDATE') {
+                        setShowToast(`Status Updated: ${payload.new.document_type} → ${payload.new.status}`);
+                    }
+                    fetchPendingCount();
+                })
+                .subscribe();
+
             return () => {
                 isMounted.current = false;
-                supabase.removeChannel(channel);
+                supabase.removeChannel(credChannel);
+                supabase.removeChannel(appChannel);
             };
         } else {
             if (isMounted.current) setLoading(true);
         }
-    }, [fetchCredentials, user?.id]);
+    }, [fetchCredentials, fetchPendingCount, user?.id]);
 
     const filteredCreds = credentials.filter(c => 
         (c.document_type || "Unknown Document").toLowerCase().includes(searchTerm.toLowerCase())
@@ -126,6 +154,8 @@ export default function StudentDashboard() {
 
     return (
         <div className="min-h-screen bg-[#f8fafc] pb-20 font-sans">
+
+            {/* Toast notification */}
             {showToast && (
                 <div className="fixed top-24 right-6 z-50 animate-in slide-in-from-right-10">
                     <div className="bg-indigo-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4">
@@ -137,6 +167,8 @@ export default function StudentDashboard() {
             )}
 
             <div className="max-w-6xl mx-auto px-4 pt-12 space-y-10">
+
+                {/* Header */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                     <div className="space-y-1">
                         <h1 className="text-4xl font-black text-slate-900 tracking-tighter uppercase italic">
@@ -144,25 +176,44 @@ export default function StudentDashboard() {
                         </h1>
                         <p className="text-slate-400 font-bold text-[10px] tracking-[0.4em] uppercase">Immutable Academic Ledger</p>
                     </div>
-                    
-                    <div className="relative w-full md:w-72">
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                        <input 
-                            type="text"
-                            placeholder="SEARCH ARCHIVES..."
-                            value={searchTerm} // ◄ Controlled value binding matching the structural pattern
-                            className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-2xl text-xs font-bold tracking-widest focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none"
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
+
+                    <div className="flex items-center gap-3 w-full md:w-auto">
+                        {/* Navigates to the dedicated application status page */}
+                        <button
+                            onClick={() => navigate('/student/view-credential')}
+                            className="relative flex items-center gap-2 px-5 py-3 bg-white border border-slate-200 text-slate-800 rounded-2xl hover:border-indigo-600 transition-all shadow-sm font-black uppercase text-[10px] tracking-widest shrink-0"
+                        >
+                            <Clock size={16} className="text-amber-500" />
+                            My Applications
+                            {/* Live count badge — disappears when no pending apps */}
+                            {pendingCount > 0 && (
+                                <span className="absolute -top-2 -right-2 bg-amber-400 text-white text-[9px] font-black w-5 h-5 rounded-full flex items-center justify-center shadow">
+                                    {pendingCount}
+                                </span>
+                            )}
+                        </button>
+
+                        <div className="relative w-full md:w-72">
+                            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                            <input 
+                                type="text"
+                                placeholder="SEARCH ARCHIVES..."
+                                value={searchTerm}
+                                className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-2xl text-xs font-bold tracking-widest focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none"
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
                     </div>
                 </div>
 
+                {/* Stat Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <StatCard label="Verified Assets" val={credentials.filter(c => c.onChainStatus).length} icon={ShieldCheck} color="text-emerald-600" bg="bg-emerald-50" />
                     <StatCard label="Pending Sync" val={credentials.filter(c => c.isValidating).length} icon={Clock} color="text-amber-600" bg="bg-amber-50" />
                     <StatCard label="Total Records" val={credentials.length} icon={FileSearch} color="text-indigo-600" bg="bg-indigo-50" />
                 </div>
 
+                {/* Credentials Table */}
                 <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl overflow-hidden">
                     <div className="overflow-x-auto">
                         <table className="w-full border-collapse">
@@ -212,16 +263,6 @@ export default function StudentDashboard() {
                                                             <QrCode size={18} />
                                                         </button>
                                                         <button 
-                                                            onClick={async () => {
-                                                                const downloadUrl = item.file_url || `https://ipfs.io/ipfs/${item.ipfs_cid}`;
-                                                                if (downloadUrl) window.open(downloadUrl, '_blank');
-                                                            }}
-                                                            className="p-3 bg-white border border-slate-200 text-slate-400 hover:text-indigo-600 hover:border-indigo-600 rounded-xl transition-all" 
-                                                            title="Download"
-                                                        >
-                                                            <Download size={18} />
-                                                        </button>
-                                                        <button 
                                                             onClick={() => navigate(`/verify/${item.application_id || index}`)}
                                                             className="p-3 bg-white border border-slate-200 text-slate-400 hover:text-indigo-600 hover:border-indigo-600 rounded-xl transition-all" 
                                                             title="View Details"
@@ -238,10 +279,15 @@ export default function StudentDashboard() {
                         </table>
                     </div>
                 </div>
+
             </div>
         </div>
     );
 }
+
+// ===========================================
+// SUB-COMPONENTS
+// ===========================================
 
 const StatCard = ({ label, val, icon: Icon, color, bg }) => (
     <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all group">
@@ -257,6 +303,7 @@ const StatCard = ({ label, val, icon: Icon, color, bg }) => (
     </div>
 );
 
+// Shows blockchain verification state for issued credentials
 const StatusBadge = ({ item }) => {
     if (item.isValidating) return (
         <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-slate-100 rounded-full animate-pulse">
@@ -264,14 +311,12 @@ const StatusBadge = ({ item }) => {
             <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">Syncing...</span>
         </div>
     );
-
     if (item.onChainStatus) return (
         <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-emerald-50 text-emerald-600 rounded-full border border-emerald-100">
             <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></div>
             <span className="text-[9px] font-black uppercase tracking-tighter">Verified On-Chain</span>
         </div>
     );
-
     return (
         <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-amber-50 text-amber-600 rounded-full border border-amber-100">
             <span className="text-[9px] font-black uppercase tracking-tighter">Not Found On-Chain</span>
