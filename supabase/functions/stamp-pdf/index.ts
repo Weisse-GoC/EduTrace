@@ -37,15 +37,25 @@ serve(async (req) => {
     );
 
     // 1. Fetch unencrypted plain source PDF
-    const ipfsRes = await fetch(
-      `https://bfanhxtahmaadacfhnnx.supabase.co/functions/v1/ipfs-upload?cid=${cid}`,
-      {
-        method: 'GET',
-        headers: { 'Authorization': authHeader }
-      }
+    // Fetch raw encrypted bytes directly from Pinata
+    const ipfsRes = await fetch(`https://gateway.pinata.cloud/ipfs/${cid}`);
+    if (!ipfsRes.ok) throw new Error(`IPFS fetch failed: ${ipfsRes.status}`);
+
+    const combined = new Uint8Array(await ipfsRes.arrayBuffer());
+    const iv = combined.slice(0, 12);
+    const encryptedData = combined.slice(12);
+
+    const aesSecret = Deno.env.get("AES_SECRET_KEY")!;
+    const keyMaterial = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(aesSecret));
+    const cryptoKey = await crypto.subtle.importKey(
+      "raw", keyMaterial, { name: "AES-GCM" }, false, ["decrypt"]
     );
-    if (!ipfsRes.ok) throw new Error(`IPFS fetch failed with status: ${ipfsRes.status}`);
-    const pdfBytes = await ipfsRes.arrayBuffer();
+
+    const pdfBytes = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv },
+      cryptoKey,
+      encryptedData
+    );
 
     // 2. Storage Asset Downloader
     const fetchAsset = async (path: string) => {
@@ -113,8 +123,8 @@ serve(async (req) => {
           page.drawImage(wmImage, {
             x: x,
             y: y,
-            width: tileDims.width -0.05, // Retain the +1 grid line bleed fix
-            height: tileDims.height -0.06,
+            width: tileDims.width - 0.05, // Retain the +1 grid line bleed fix
+            height: tileDims.height - 0.06,
           });
         }
       }
@@ -147,7 +157,7 @@ serve(async (req) => {
       });
     }
 
-    // ── QR CODE GENERATOR ─────────────────────────────────────────────────────
+    // ── QR CODE GENERATOR & VERIFICATION NOTICE ──────────────────────────────
     if (applicationId) {
       const verificationUrl = `https://edutracetestuc.netlify.app/verify/${applicationId}`;
 
@@ -190,6 +200,26 @@ serve(async (req) => {
         y: qrY - 22,
         size: 5,
         color: rgb(0.55, 0.55, 0.55),
+      });
+
+      // ── RED TOP-BANNER VERIFICATION STAMP ──────────────────────────────────
+      const noticeText = "Copy provided link and paste in edutracetestuc.netlify.app/verify-portal for verification.";
+      const fontSize = 8;
+      
+      // Embed standard Helvetica Bold to calculate dimensions dynamically
+      const helveticaFont = await pdfDoc.embedFont("Helvetica-Bold");
+      const textWidth = helveticaFont.widthOfTextAtSize(noticeText, fontSize);
+      
+      // Align completely center horizontally, and push down slightly from the very top boundary
+      const textX = (width - textWidth) / 2;
+      const textY = height - 15;
+
+      firstPage.drawText(noticeText, {
+        x: textX,
+        y: textY,
+        size: fontSize,
+        font: helveticaFont,
+        color: rgb(0.85, 0.15, 0.15),
       });
     }
 
