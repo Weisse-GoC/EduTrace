@@ -11,36 +11,33 @@ const StaffRequestCard = ({
     onToggleExpand,
     onToggleClearance,
     onUpdateStatus,
-    onMintAsset,          // handleMintRequest from StaffDashboard
+    onMintAsset,
     updatingClearance,
 }) => {
     const [cardFiles, setCardFiles] = useState({});
     const [isProcessing, setIsProcessing] = useState(false);
+    const [rejectionReason, setRejectionReason] = useState('');
+    const [showRejectInput, setShowRejectInput] = useState(false);
 
-    const record       = req.student_records || {};
-    const studentName  = record.full_name  || req.student_name || "Unknown Student";
-    const studentId    = record.student_id || req.student_id   || "N/A";
+    const record      = req.student_records || {};
+    const studentName = record.full_name  || req.student_name || "Unknown Student";
+    const studentId   = record.student_id || req.student_id   || "N/A";
 
-    // Normalise status to lowercase once for all comparisons
     const status = req.status?.toLowerCase() || 'pending';
 
-    // ── Document routing classification ────────────────────────────────────
     const docTypeString = req.document_type?.toLowerCase() || '';
 
-    // High-tier docs need Department Head sign-off before minting
     const requiresHeadReview =
         docTypeString.includes('transcript') ||
         docTypeString.includes('grades')     ||
         docTypeString.includes('diploma');
 
-    // All four clearance flags must be true to unlock the action panel
     const isFullyCleared =
         req.is_cleared_accounting &&
         req.is_cleared_library    &&
         req.is_cleared_dean       &&
         req.is_cleared_registrar;
 
-    // ── Document list helpers ───────────────────────────────────────────────
     const getRequiredDocsList = (inputStr) => {
         if (!inputStr) return ["Document"];
         if (inputStr.toUpperCase().includes("CERTIFICATION:")) {
@@ -50,9 +47,9 @@ const StaffRequestCard = ({
         return [inputStr];
     };
 
-    const targetDocs          = getRequiredDocsList(req.document_type);
-    const totalUploadedCount  = Object.keys(cardFiles).filter(k => cardFiles[k]).length;
-    const isComplete          = totalUploadedCount === targetDocs.length;
+    const targetDocs         = getRequiredDocsList(req.document_type);
+    const totalUploadedCount = Object.keys(cardFiles).filter(k => cardFiles[k]).length;
+    const isComplete         = totalUploadedCount === targetDocs.length;
 
     const handleLocalFileChange = (docName, file, event) => {
         if (file && file.type !== "application/pdf") {
@@ -64,11 +61,6 @@ const StaffRequestCard = ({
         if (event) event.target.value = '';
     };
 
-    // ── Action handlers ─────────────────────────────────────────────────────
-
-    // ROUTE A — Push to Head
-    // Uploads files to IPFS (same as standard route), then sets status to
-    // 'Verified' so the head can review the already-secured docs and mint.
     const handlePushToHead = async () => {
         if (!isComplete) return;
         setIsProcessing(true);
@@ -76,7 +68,7 @@ const StaffRequestCard = ({
             await onUpdateStatus(
                 req.application_id, 'Verified',
                 studentName, studentId, req.user_id,
-                cardFiles   // files passed up → IPFS upload fires in dashboard
+                cardFiles
             );
         } catch (err) {
             console.error("Push to Head failed:", err);
@@ -85,9 +77,6 @@ const StaffRequestCard = ({
         }
     };
 
-    // ROUTE B — Push for Issuance
-    // Uploads attached files to IPFS (handled inside handleUpdateStatus),
-    // then updates status to 'To_be_Issued'. "Issue to Student" appears next.
     const handlePushForIssuance = async () => {
         if (!isComplete) return;
         setIsProcessing(true);
@@ -95,7 +84,7 @@ const StaffRequestCard = ({
             await onUpdateStatus(
                 req.application_id, 'To_be_Issued',
                 studentName, studentId, req.user_id,
-                cardFiles   // files passed up → IPFS upload fires in dashboard
+                cardFiles
             );
         } catch (err) {
             console.error("Push for Issuance failed:", err);
@@ -104,16 +93,12 @@ const StaffRequestCard = ({
         }
     };
 
-    // ROUTE C — Issue to Student
-    // Invokes blockchain minting via onMintAsset (handleMintRequest in dashboard).
-    // Only reachable when status === 'to_be_issued' (IPFS already done).
     const handleFinalIssuance = async () => {
         setIsProcessing(true);
         try {
             if (onMintAsset) {
                 await onMintAsset(req.application_id);
             } else {
-                // Fallback if mint hook is unavailable
                 await onUpdateStatus(
                     req.application_id, 'L1_Issued',
                     studentName, studentId, req.user_id, {}
@@ -126,10 +111,34 @@ const StaffRequestCard = ({
         }
     };
 
-    const handleReject = () =>
-        onUpdateStatus(req.application_id, 'Rejected', studentName, studentId, req.user_id, {});
+    const handleReject = () => {
+        if (!showRejectInput) return setShowRejectInput(true);
+        if (!rejectionReason.trim()) return;
+        onUpdateStatus(req.application_id, 'Rejected', studentName, studentId, req.user_id, { rejectionReason });
+    };
 
-    // ── Visual helpers ──────────────────────────────────────────────────────
+    // Reusable reject block
+    const rejectBlock = (
+        <div className="flex flex-col gap-2">
+            {showRejectInput && (
+                <textarea
+                    rows={2}
+                    placeholder="Reason for rejection..."
+                    value={rejectionReason}
+                    onChange={(e) => setRejectionReason(e.target.value)}
+                    className="w-full p-3 rounded-2xl border border-slate-200 text-xs font-bold text-slate-700 focus:outline-none focus:border-red-300 resize-none"
+                />
+            )}
+            <button
+                disabled={isProcessing}
+                onClick={handleReject}
+                className="px-6 py-5 border-2 border-slate-100 text-slate-300 rounded-2xl font-black uppercase text-[10px] tracking-[0.2em] hover:border-red-500 hover:text-red-500 transition-all disabled:opacity-40"
+            >
+                {showRejectInput ? 'Confirm Reject' : 'Reject'}
+            </button>
+        </div>
+    );
+
     const dotColor = {
         verified:     'bg-emerald-500',
         to_be_issued: 'bg-sky-500',
@@ -148,7 +157,6 @@ const StaffRequestCard = ({
         l1_issued:    'bg-indigo-600 shadow-indigo-100',
     }[status] || 'bg-amber-400 shadow-amber-100';
 
-    // ── Render ──────────────────────────────────────────────────────────────
     return (
         <div className={`group bg-white rounded-[3.5rem] transition-all duration-500 border-2 ${
             isExpanded
@@ -209,7 +217,7 @@ const StaffRequestCard = ({
                 <div className="p-10 bg-slate-50/50 rounded-b-[3.5rem] border-t border-slate-100 animate-in fade-in slide-in-from-top-4 duration-500">
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
 
-                        {/* LEFT — Clearance toggles (Step 1) */}
+                        {/* LEFT — Clearance toggles */}
                         <div>
                             <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-8 flex items-center gap-2">
                                 <ShieldCheck size={14} className="text-indigo-500" />
@@ -218,10 +226,10 @@ const StaffRequestCard = ({
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 {[
-                                    { label: 'Accounting Dept',  field: 'is_cleared_accounting' },
-                                    { label: 'University Library', field: 'is_cleared_library' },
-                                    { label: "Dean's Office",     field: 'is_cleared_dean' },
-                                    { label: 'Registrar Review',  field: 'is_cleared_registrar' },
+                                    { label: 'Accounting Dept',    field: 'is_cleared_accounting' },
+                                    { label: 'University Library',  field: 'is_cleared_library' },
+                                    { label: "Dean's Office",       field: 'is_cleared_dean' },
+                                    { label: 'Registrar Review',    field: 'is_cleared_registrar' },
                                 ].map(dept => {
                                     const isUpdating = updatingClearance === `${req.application_id}:${dept.field}`;
                                     const isCleared  = !!req[dept.field];
@@ -255,33 +263,17 @@ const StaffRequestCard = ({
                             </div>
                         </div>
 
-                        {/* RIGHT — Decision center (Step 2 / 3) */}
+                        {/* RIGHT — Decision center */}
                         <div className="flex flex-col justify-end">
-
-                            {/* ════════════════════════════════════════════════
-                                STATE TREE
-                                ════════════════════════════════════════════════
-
-                                pending + cleared + requiresHeadReview  → Push to Head
-                                pending + cleared + !requiresHeadReview → Upload + Push for Issuance
-                                to_be_issued                            → Issue to Student (mint)
-                                verified + requiresHeadReview           → Awaiting Head lock view
-                                pending + !cleared                      → Locked placeholder
-                                rejected / l1_issued / issued / minted  → Final status display
-                            */}
 
                             {status === 'pending' && isFullyCleared ? (
 
                                 requiresHeadReview ? (
-                                    /* ── HEAD REVIEW ROUTE ──────────────────────────────────────
-                                       Transcript / Diploma / Grades: upload to IPFS first, then
-                                       forward to head. Head reviews already-secured docs + mints. */
                                     <div className="bg-white p-6 rounded-3xl border-2 border-amber-100 shadow-xl shadow-amber-50/50 animate-in zoom-in-95 duration-500">
                                         <p className="text-[10px] font-black uppercase text-amber-600 tracking-widest mb-4 flex items-center gap-2">
                                             <Upload size={14} /> Step 2: Attach & Forward ({totalUploadedCount}/{targetDocs.length})
                                         </p>
 
-                                        {/* Per-document upload rows — identical to standard route */}
                                         <div className="space-y-2 max-h-56 overflow-y-auto mb-4 pr-1">
                                             {targetDocs.map((docName, index) => {
                                                 const fileAttached = cardFiles[docName];
@@ -339,25 +331,17 @@ const StaffRequestCard = ({
                                                     : <><Send size={16} /> Push to Head</>
                                                 }
                                             </button>
-                                            <button
-                                                disabled={isProcessing}
-                                                onClick={handleReject}
-                                                className="px-6 py-5 border-2 border-slate-100 text-slate-300 rounded-2xl font-black uppercase text-[10px] tracking-[0.2em] hover:border-red-500 hover:text-red-500 transition-all disabled:opacity-40"
-                                            >
-                                                Reject
-                                            </button>
+                                            {rejectBlock}
                                         </div>
                                     </div>
+
                                 ) : (
-                                    /* ── STANDARD ISSUANCE ROUTE ────────────────────────────────
-                                       Staff attaches PDFs, then clicks Push for Issuance.
-                                       Parent uploads to IPFS → status → To_be_Issued.           */
+
                                     <div className="bg-white p-6 rounded-3xl border-2 border-indigo-100 shadow-xl shadow-indigo-50/50 animate-in zoom-in-95 duration-500">
                                         <p className="text-[10px] font-black uppercase text-indigo-500 tracking-widest mb-4 flex items-center gap-2">
                                             <Upload size={14} /> Step 2: Attach Documents ({totalUploadedCount}/{targetDocs.length})
                                         </p>
 
-                                        {/* Per-document upload rows */}
                                         <div className="space-y-2 max-h-56 overflow-y-auto mb-4 pr-1">
                                             {targetDocs.map((docName, index) => {
                                                 const fileAttached = cardFiles[docName];
@@ -412,22 +396,13 @@ const StaffRequestCard = ({
                                                     : <><Upload size={16} /> Push for Issuance</>
                                                 }
                                             </button>
-                                            <button
-                                                disabled={isProcessing}
-                                                onClick={handleReject}
-                                                className="px-6 py-5 border-2 border-slate-100 text-slate-300 rounded-2xl font-black uppercase text-[10px] tracking-[0.2em] hover:border-red-500 hover:text-red-500 transition-all disabled:opacity-40"
-                                            >
-                                                Reject
-                                            </button>
+                                            {rejectBlock}
                                         </div>
                                     </div>
                                 )
 
                             ) : status === 'to_be_issued' ? (
 
-                                /* ── MINTING READY ──────────────────────────────────────────
-                                   IPFS upload is complete; CID is on the record.
-                                   Issue to Student triggers the mint-credential edge function. */
                                 <div className="bg-white p-6 rounded-3xl border-2 border-emerald-100 shadow-xl shadow-emerald-50/50 animate-in zoom-in-95 duration-500">
                                     <p className="text-[10px] font-black uppercase text-emerald-500 tracking-widest mb-2 flex items-center gap-2">
                                         <Zap size={14} /> Step 3: Authorise & Mint
@@ -447,20 +422,12 @@ const StaffRequestCard = ({
                                                 : <><Zap size={16} /> Issue to Student</>
                                             }
                                         </button>
-                                        <button
-                                            disabled={isProcessing}
-                                            onClick={handleReject}
-                                            className="px-6 py-5 border-2 border-slate-100 text-slate-300 rounded-2xl font-black uppercase text-[10px] tracking-[0.2em] hover:border-red-500 hover:text-red-500 transition-all disabled:opacity-40"
-                                        >
-                                            Reject
-                                        </button>
+                                        {rejectBlock}
                                     </div>
                                 </div>
 
                             ) : status === 'verified' && requiresHeadReview ? (
 
-                                /* ── AWAITING HEAD ──────────────────────────────────────────
-                                   Application was pushed to head. Staff can only wait.        */
                                 <div className="p-8 rounded-3xl border-2 border-amber-100 bg-amber-50 text-amber-700 text-center flex flex-col items-center gap-3">
                                     <Clock size={32} className="animate-pulse" />
                                     <p className="font-black uppercase text-xs tracking-[0.2em]">
@@ -473,17 +440,18 @@ const StaffRequestCard = ({
 
                             ) : status === 'pending' && !isFullyCleared ? (
 
-                                /* ── CLEARANCES INCOMPLETE ───────────────────────────────── */
-                                <div className="p-12 rounded-[3rem] border-2 border-dashed border-slate-200 flex flex-col items-center text-center">
-                                    <Clock className="text-slate-200 mb-4" size={48} />
-                                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.3em]">
-                                        Complete all clearances to unlock upload
-                                    </p>
+                                <div className="flex flex-col gap-4">
+                                    <div className="p-12 rounded-[3rem] border-2 border-dashed border-slate-200 flex flex-col items-center text-center">
+                                        <Clock className="text-slate-200 mb-4" size={48} />
+                                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.3em]">
+                                            Complete all clearances to unlock upload
+                                        </p>
+                                    </div>
+                                    {rejectBlock}
                                 </div>
 
                             ) : (
 
-                                /* ── TERMINAL STATE: Rejected / L1_Issued / Issued / Minted ─ */
                                 <div className={`p-8 rounded-3xl border-2 text-center flex flex-col items-center gap-3 ${
                                     status === 'rejected'
                                         ? 'bg-red-50 border-red-100 text-red-700'
@@ -496,6 +464,11 @@ const StaffRequestCard = ({
                                     <p className="font-black uppercase text-xs tracking-[0.2em]">
                                         {status === 'rejected' ? 'Application Refused' : 'Application Processed'}
                                     </p>
+                                    {status === 'rejected' && req.rejection_reason && (
+                                        <p className="text-xs font-bold text-red-400 max-w-xs">
+                                            {req.rejection_reason}
+                                        </p>
+                                    )}
                                 </div>
 
                             )}

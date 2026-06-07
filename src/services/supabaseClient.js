@@ -258,7 +258,7 @@ export const getCredentialById = async (credentialId) => {
 };
 
 // Fetches only active applications — rows disappear once status moves past these three
-// student_id is the auth UUID stored when the application was submitted
+// user_id is the auth UUID stored when the application was submitted
 export const getApplicationsByStudentId = async (studentId) => {
     if (!studentId) return [];
 
@@ -269,10 +269,11 @@ export const getApplicationsByStudentId = async (studentId) => {
             document_type,
             status,
             created_at,
-            purpose
+            purpose,
+            rejection_reason
         `)
         .eq('user_id', studentId)
-        .in('status', ['Pending', 'Verified', 'To_be_Issued'])
+        .in('status', ['Pending', 'Verified', 'To_be_Issued', 'Rejected']) // Only show active applications
         .order('created_at', { ascending: false });
 
     if (error) {

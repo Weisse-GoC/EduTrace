@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../services/supabaseClient';
 import { useAuth } from '../../hooks/useAuth';
 import { getApplicationsByStudentId } from '../../services/supabaseClient';
-import { Loader2, ArrowLeft, Clock, ShieldCheck, FileText } from 'lucide-react';
+import { Loader2, ArrowLeft, Clock, ShieldCheck, FileText, XCircle } from 'lucide-react';
 
 export default function ViewCredential() {
     const navigate = useNavigate();
@@ -117,6 +117,14 @@ export default function ViewCredential() {
                                     icon: <FileText size={18} className="text-blue-500" />,
                                     ping: true
                                 },
+                                'Rejected': {
+                                    border: 'border-l-red-400',
+                                    bg: 'bg-red-50',
+                                    badge: 'bg-red-100 text-red-700 border-red-200',
+                                    dot: 'bg-red-400',
+                                    icon: <XCircle size={18} className="text-red-500" />,
+                                    ping: false
+                                },
                             };
                             const c = config[app.status] || config['Pending'];
 
@@ -135,6 +143,14 @@ export default function ViewCredential() {
                                             </p>
                                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                                                 {app.purpose || '—'} · {app.created_at ? new Date(app.created_at).toLocaleDateString() : 'N/A'}
+                                                {app.status === 'Rejected' && app.rejection_reason && (
+                                                <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">
+                                                        Reason: {app.rejection_reason || 'N/A'}
+                                                </p>
+                                                )}
+                                            </p>
+                                            <p>
+                                                <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Application ID:</span> <span className="text-[10px] font-mono text-slate-500">{app.application_id}</span>
                                             </p>
                                         </div>
                                     </div>

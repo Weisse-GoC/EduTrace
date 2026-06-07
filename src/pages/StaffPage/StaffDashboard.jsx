@@ -216,6 +216,7 @@ export default function StaffDashboard() {
                 updatePayload.completed_at = timestamp;
             } else if (newStatus === 'Rejected') {
                 updatePayload.completed_at = timestamp;
+                updatePayload.rejection_reason = safeFilesMap?.rejectionReason || null;
             }
 
             const { error: appError } = await supabase
