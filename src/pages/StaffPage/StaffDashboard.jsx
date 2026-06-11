@@ -230,7 +230,7 @@ export default function StaffDashboard() {
             if ((newStatus === 'Verified' || newStatus === 'To_be_Issued') && ipfsCid) {
                 const { error: credError } = await supabase
                     .from('credentials')
-                    .insert([{
+                    .upsert([{
                         application_id: applicationId,
                         issuer_id: profile.id,
                         recipient_id: studentAuthId,
@@ -382,7 +382,7 @@ export default function StaffDashboard() {
                 </div>
 
                 <div className="flex bg-white p-1.5 rounded-4xl shadow-sm border border-slate-100 overflow-x-auto">
-                    {["All", "Pending", "Verified", "To_be_Issued", "Rejected", "Processed"].map((tab) => (
+                    {["All", "Pending", "Verified", "To_be_Issued", "Rejected", "Processed", "Returned"].map((tab) => (
                         <button
                             key={tab}
                             onClick={() => setStatusFilter(tab)}
@@ -407,6 +407,7 @@ export default function StaffDashboard() {
                 { label: "To be issued",    value: stats.to_be_issued,  color: "#378ADD", delay: "0.9s" },
                 { label: "Processed",       value: stats.issued,        color: "#2C2C2A", delay: "1.2s" },
                 { label: "Rejected",        value: stats.rejected,      color: "#E24B4A", delay: "1.5s" },
+                { label: "Returned",        value: stats.returned,      color: "#A3A3A1", delay: "1.8s" },
             ].map(({ label, value, color, delay }) => (
                 <div key={label} className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-100 bg-white text-sm font-bold whitespace-nowrap">
                 <span

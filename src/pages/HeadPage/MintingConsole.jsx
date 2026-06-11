@@ -1,65 +1,53 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { supabase } from '../../services/supabaseClient'; 
+import { supabase } from '../../services/supabaseClient';
 import { useAuth } from '../../hooks/useAuth';
-import { Loader2, Zap, AlertCircle, FileText, ExternalLink, ChevronDown } from 'lucide-react';
+import { Loader2, Zap, AlertCircle, FileText, ExternalLink, ChevronDown, RotateCcw, MessageSquare } from 'lucide-react';
 
 const IPFS_GATEWAY = "https://gateway.pinata.cloud/ipfs/";
 
 export default function MintingConsole() {
-    const { docId } = useParams(); 
+    const { docId } = useParams();
     const navigate = useNavigate();
     const { profile } = useAuth();
-    
+
     const [appData, setAppData] = useState(null);
-    const [documents, setDocuments] = useState([]); // Will store array of { name, cid }
-    const [activeDocName, setActiveDocName] = useState(null); // Tracks open accordion panel
-    
-    // Decrypted blob URLs mapped by CID
+    const [documents, setDocuments] = useState([]);
+    const [activeDocName, setActiveDocName] = useState(null);
     const [decryptedUrls, setDecryptedUrls] = useState({});
     const [isDecrypting, setIsDecrypting] = useState(false);
-
-    // ADDED: The master persistent cache tracking { [cid]: objectUrl }
     const urlsRef = useRef({});
 
     const [loading, setLoading] = useState(true);
     const [isMinting, setIsMinting] = useState(false);
     const [mintingStep, setMintingStep] = useState('');
 
-    // Parses your explicit "Name:CID || Name:CID" format
+    // ── Send Back state ───────────────────────────────────────────────────────
+    const [showSendBack, setShowSendBack] = useState(false);
+    const [sendBackReason, setSendBackReason] = useState('');
+    const [isSendingBack, setIsSendingBack] = useState(false);
+
     const parseCustomIpfsBundle = (ipfsCid) => {
         if (!ipfsCid) return [];
-        
         const rawItems = String(ipfsCid).split('||');
-        
         return rawItems.map(item => {
             const cleanItem = item.trim();
             const colonIndex = cleanItem.indexOf(':');
-            
             if (colonIndex !== -1) {
                 const name = cleanItem.substring(0, colonIndex).trim();
                 const cid = cleanItem.substring(colonIndex + 1).trim();
                 if (name && cid) return { name, cid };
             }
-            
             return { name: "Credential Document Asset", cid: cleanItem };
         }).filter(doc => doc.cid.length > 0);
     };
 
-    // FIXED: Hits your secure Supabase Edge Function instead of bypassing it
     const handleAccordionToggle = async (doc) => {
         const isCurrentlyOpen = activeDocName === doc.name;
-        
-        if (isCurrentlyOpen) {
-            setActiveDocName(null);
-            return;
-        }
+        if (isCurrentlyOpen) { setActiveDocName(null); return; }
 
         setActiveDocName(doc.name);
-
-        // ADDED: Synchronous Ref Cache Check. Skip if already fetched and decrypted!
         if (urlsRef.current[doc.cid]) {
-            // Just in case the state missed it, sync it back up
             if (!decryptedUrls[doc.cid]) {
                 setDecryptedUrls(prev => ({ ...prev, [doc.cid]: urlsRef.current[doc.cid] }));
             }
@@ -68,46 +56,30 @@ export default function MintingConsole() {
 
         setIsDecrypting(true);
         try {
-            // 1. Fetch current session token to pass to the Edge Function headers
             const { data: { session } } = await supabase.auth.getSession();
             const token = session?.access_token || supabase.supabaseKey;
-
-            // 2. Call your Supabase Edge Function GET endpoint
             const response = await fetch(
-                `${supabase.supabaseUrl}/functions/v1/ipfs-upload?cid=${doc.cid}&raw=true`,
-                {
-                    method: 'GET',
-                    headers: { 'Authorization': `Bearer ${token}` }
-                }
+                `${supabase.supabaseUrl}/functions/v1/ipfs-upload?cid=${doc.cid}&applicationId=${docId}`,
+                { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } }
             );
-
             if (!response.ok) throw new Error(`Edge Function responded with status: ${response.status}`);
-
-            // 3. Collect the clean, decrypted PDF stream directly as a Blob
             const pdfBlob = await response.blob();
-            
-            // 4. Create local object URL for the sandboxed iframe
             const localUrl = URL.createObjectURL(pdfBlob);
-            
-            // ADDED: Write to persistent Ref Cache AND React UI State synchronously
             urlsRef.current[doc.cid] = localUrl;
             setDecryptedUrls(prev => ({ ...prev, [doc.cid]: localUrl }));
         } catch (error) {
-            console.error("Failed to route decryption through Edge Function:", error);
+            console.error("Failed to decrypt document:", error);
             alert("Could not load and decrypt document. Check console logs.");
         } finally {
             setIsDecrypting(false);
         }
     };
 
-    // FIXED: Clean up memory leaks from local blob URLs ONLY on component unmount
     useEffect(() => {
         return () => {
-            Object.values(urlsRef.current).forEach(url => {
-                if (url) URL.revokeObjectURL(url);
-            });
+            Object.values(urlsRef.current).forEach(url => { if (url) URL.revokeObjectURL(url); });
         };
-    }, []); // Empty dependency array ensures this only runs when the user leaves the page entirely
+    }, []);
 
     useEffect(() => {
         const fetchDetails = async () => {
@@ -115,24 +87,17 @@ export default function MintingConsole() {
                 setLoading(true);
                 const { data: application, error: appError } = await supabase
                     .from('student_applications')
-                    .select(`
-                        *,
-                        student_records!user_id (*)
-                    `)
+                    .select('*, student_records!user_id (*)')
                     .eq('application_id', docId)
                     .maybeSingle();
-                
-                if (appError) throw appError;
 
+                if (appError) throw appError;
                 if (application) {
                     application.student_records = Array.isArray(application.student_records)
                         ? application.student_records[0]
                         : application.student_records;
-
-                    const parsedList = parseCustomIpfsBundle(application.ipfs_cid);
-                    setDocuments(parsedList);
+                    setDocuments(parseCustomIpfsBundle(application.ipfs_cid));
                 }
-                
                 setAppData(application);
             } catch (error) {
                 console.error("Fetch failure:", error.message);
@@ -140,45 +105,67 @@ export default function MintingConsole() {
                 setLoading(false);
             }
         };
-
         if (docId) fetchDetails();
     }, [docId]);
 
     const handleIssueAndMint = async () => {
         const recipientId = appData?.student_records?.id;
         const ipfsCid = appData?.ipfs_cid;
-
-        if (!recipientId || !ipfsCid) {
-            return alert("Error: Missing Student Record ID or IPFS CID. Cannot mint.");
-        }
-        
+        if (!recipientId || !ipfsCid) return alert("Error: Missing Student Record ID or IPFS CID. Cannot mint.");
         if (!window.confirm("Authorize Blockchain Minting to Arbitrum Sepolia?")) return;
 
         setIsMinting(true);
         setMintingStep('Initiating L2 Transaction...');
-        
         try {
             const { data, error } = await supabase.functions.invoke('mint-credential', {
-                body: { 
-                    applicationId: docId,
-                    recipientUuid: recipientId,
-                    cid: ipfsCid
-                }
+                body: { applicationId: docId, recipientUuid: recipientId, cid: ipfsCid }
             });
-
-            if (error) {
-                const errorDetails = error.context?.message || error.message || "Unknown Minting Error";
-                throw new Error(errorDetails);
-            }
-
+            if (error) throw new Error(error.context?.message || error.message || "Unknown Minting Error");
             const returnedHash = data?.txHash || data?.hash || "SUCCESS";
             setMintingStep('Success! Transaction Hash: ' + returnedHash.substring(0, 10) + '...');
-            
             setTimeout(() => navigate('/head/dashboard'), 3000);
         } catch (err) {
             console.error("Critical Minting Failure:", err);
             setMintingStep(`Failed: ${err.message}`);
             setIsMinting(false);
+        }
+    };
+
+    // ── Send Back handler ─────────────────────────────────────────────────────
+    // Sets status to 'Returned' (not 'Rejected') so the student's application
+    // stays alive — staff just needs to re-upload the correct file.
+    // Clears ipfs_cid so staff can't accidentally mint the wrong file later.
+    const handleSendBack = async () => {
+        const reason = sendBackReason.trim();
+        if (!reason) return alert('Please enter a reason before sending back.');
+
+        setIsSendingBack(true);
+        try {
+            const { error } = await supabase
+                .from('student_applications')
+                .update({
+                    status: 'Returned',
+                    ipfs_cid: null,
+                    rejection_reason: `[HEAD RETURNED] ${reason}`,
+                    reopened_at: new Date().toISOString(),
+                })
+                .eq('application_id', docId);
+
+            if (error) throw error;
+
+            // Also clear the staged credential row so a fresh one gets created on re-upload
+            await supabase
+                .from('credentials')
+                .delete()
+                .eq('application_id', docId)
+                .eq('status', 'Staged');
+
+            navigate('/head/dashboard');
+        } catch (err) {
+            console.error('Send back failed:', err);
+            alert('Failed to send back: ' + err.message);
+        } finally {
+            setIsSendingBack(false);
         }
     };
 
@@ -208,8 +195,8 @@ export default function MintingConsole() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                
-                {/* Left Section: Dynamic Accordion List */}
+
+                {/* Left: Document accordion */}
                 <div className="lg:col-span-8 space-y-4">
                     {documents.length === 0 ? (
                         <div className="bg-white rounded-[3rem] border border-slate-200 p-20 text-center">
@@ -219,19 +206,16 @@ export default function MintingConsole() {
                     ) : (
                         documents.map((doc) => {
                             const isOpen = activeDocName === doc.name;
-                            
-                            // Formats the raw link to force a download of the encrypted blob
                             const safeFileName = encodeURIComponent(doc.name.replace(/\s+/g, '_')) + '_ENCRYPTED.enc';
                             const gatewayUrl = `${IPFS_GATEWAY}${doc.cid}?filename=${safeFileName}`;
 
                             return (
-                                <div 
-                                    key={doc.name} 
+                                <div
+                                    key={doc.name}
                                     className={`bg-white rounded-[2.5rem] border transition-all duration-200 overflow-hidden ${
                                         isOpen ? 'border-indigo-300 shadow-xl shadow-indigo-100/40' : 'border-slate-200 shadow-sm'
                                     }`}
                                 >
-                                    {/* Dropdown Header Trigger */}
                                     <button
                                         type="button"
                                         onClick={() => handleAccordionToggle(doc)}
@@ -245,25 +229,23 @@ export default function MintingConsole() {
                                                 {doc.name}
                                             </span>
                                         </div>
-                                        
                                         <div className="flex items-center gap-6 shrink-0">
-                                            <a 
-                                                href={gatewayUrl} 
-                                                target="_blank" 
+                                            <a
+                                                href={gatewayUrl}
+                                                target="_blank"
                                                 rel="noopener noreferrer"
-                                                onClick={(e) => e.stopPropagation()} 
+                                                onClick={(e) => e.stopPropagation()}
                                                 className="flex items-center gap-1.5 text-[9px] font-black uppercase text-slate-400 hover:text-indigo-600 transition-colors tracking-widest"
                                             >
                                                 RAW IPFS <ExternalLink size={12} />
                                             </a>
-                                            <ChevronDown 
-                                                size={16} 
-                                                className={`text-slate-400 transition-transform duration-200 transform ${isOpen ? 'rotate-180 text-indigo-500' : ''}`} 
+                                            <ChevronDown
+                                                size={16}
+                                                className={`text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180 text-indigo-500' : ''}`}
                                             />
                                         </div>
                                     </button>
 
-                                    {/* Live View Dropdown Iframe Content */}
                                     {isOpen && (
                                         <div className="p-4 bg-slate-100 border-t border-slate-100 relative min-h-100">
                                             {(!decryptedUrls[doc.cid] || isDecrypting) ? (
@@ -286,7 +268,7 @@ export default function MintingConsole() {
                     )}
                 </div>
 
-                {/* Right Section: Metadata Audit & Control */}
+                {/* Right: Metadata + actions */}
                 <div className="lg:col-span-4 bg-slate-900 text-white p-8 rounded-[3rem] shadow-2xl flex flex-col justify-between border border-slate-800 sticky top-10">
                     <div>
                         <div className="flex items-center gap-3 mb-8">
@@ -295,7 +277,7 @@ export default function MintingConsole() {
                             </div>
                             <h3 className="text-xs font-black uppercase text-indigo-400 tracking-[0.2em]">Metadata Audit</h3>
                         </div>
-                        
+
                         <div className="space-y-6 mb-10 border-y border-white/5 py-8">
                             <div>
                                 <p className="text-[9px] text-white/30 uppercase tracking-widest mb-2 font-black">Student Name</p>
@@ -303,14 +285,12 @@ export default function MintingConsole() {
                                     {appData.student_records?.full_name || 'NOT FOUND'}
                                 </p>
                             </div>
-                            
                             <div>
                                 <p className="text-[9px] text-white/30 uppercase tracking-widest mb-2 font-black">Academic Program</p>
                                 <p className="text-sm font-bold text-slate-300">
                                     {appData.student_records?.course || 'UNSPECIFIED'}
                                 </p>
                             </div>
-
                             <div className="grid grid-cols-2 gap-6">
                                 <div>
                                     <p className="text-[9px] text-white/30 uppercase tracking-widest mb-2 font-black">Student ID</p>
@@ -325,7 +305,6 @@ export default function MintingConsole() {
                                     </p>
                                 </div>
                             </div>
-
                             <div>
                                 <p className="text-[9px] text-white/30 uppercase tracking-widest mb-2 font-black">Raw Mapping Value</p>
                                 <p className="text-[8px] font-mono text-slate-500 break-all bg-black/40 p-3 rounded-xl border border-white/5 max-h-28 overflow-y-auto">
@@ -335,16 +314,17 @@ export default function MintingConsole() {
                         </div>
                     </div>
 
-                    <div className="space-y-4">
-                        <button 
+                    <div className="space-y-3">
+                        {/* Mint button */}
+                        <button
                             onClick={handleIssueAndMint}
-                            disabled={isMinting || documents.length === 0}
+                            disabled={isMinting || isSendingBack || documents.length === 0}
                             className="w-full py-6 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 rounded-4xl font-black uppercase text-[10px] tracking-[0.2em] flex items-center justify-center gap-3 transition-all shadow-xl shadow-indigo-900/20"
                         >
                             {isMinting ? <Loader2 className="animate-spin" size={18} /> : <Zap size={18} />}
                             {isMinting ? "Processing Transaction..." : "Authorize & Mint Bundle"}
                         </button>
-                        
+
                         {isMinting && (
                             <div className="bg-indigo-500/10 border border-indigo-500/20 p-4 rounded-2xl">
                                 <p className="text-center text-[9px] text-indigo-400 animate-pulse uppercase font-black tracking-widest">
@@ -352,13 +332,62 @@ export default function MintingConsole() {
                                 </p>
                             </div>
                         )}
-                        
-                        <p className="text-[8px] text-center text-white/20 uppercase font-bold tracking-widest">
-                            Authorized By: Head Registrar ({profile?.id?.substring(0,8) || 'SYSTEM'})
+
+                        {/* Send Back toggle */}
+                        {!isMinting && (
+                            <button
+                                type="button"
+                                onClick={() => setShowSendBack(prev => !prev)}
+                                disabled={isSendingBack}
+                                className="w-full py-4 bg-white/5 hover:bg-amber-500/10 border border-white/10 hover:border-amber-500/30 rounded-4xl font-black uppercase text-[10px] tracking-widest text-slate-400 hover:text-amber-400 flex items-center justify-center gap-2 transition-all"
+                            >
+                                <RotateCcw size={14} />
+                                Send Back to Staff
+                            </button>
+                        )}
+
+                        {/* Send Back panel */}
+                        {showSendBack && !isMinting && (
+                            <div className="bg-amber-500/5 border border-amber-500/20 rounded-3xl p-5 space-y-3 animate-in slide-in-from-top-2 duration-200">
+                                <p className="text-[9px] font-black text-amber-400 uppercase tracking-widest flex items-center gap-1.5">
+                                    <MessageSquare size={11} /> Reason for returning
+                                </p>
+                                <p className="text-[9px] text-slate-500 leading-relaxed">
+                                    This will clear the uploaded files and return the application to <span className="text-amber-400 font-bold">Pending</span> so staff can re-upload the correct documents.
+                                </p>
+                                <textarea
+                                    rows={3}
+                                    placeholder="e.g. Wrong document uploaded — TOR submitted instead of Transfer Credential..."
+                                    value={sendBackReason}
+                                    onChange={(e) => setSendBackReason(e.target.value)}
+                                    className="w-full p-3 rounded-2xl bg-slate-800 border border-slate-700 text-xs text-slate-300 font-bold placeholder:text-slate-600 focus:outline-none focus:border-amber-500/50 resize-none transition-all"
+                                />
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => { setShowSendBack(false); setSendBackReason(''); }}
+                                        className="flex-1 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-slate-300 transition-colors border border-white/5"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={handleSendBack}
+                                        disabled={isSendingBack}
+                                        className="flex-1 py-3 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 rounded-2xl font-black uppercase text-[10px] tracking-widest text-amber-400 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                                    >
+                                        {isSendingBack
+                                            ? <><Loader2 size={12} className="animate-spin" /> Returning...</>
+                                            : <><RotateCcw size={12} /> Confirm Return</>
+                                        }
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <p className="text-[8px] text-center text-white/20 uppercase font-bold tracking-widest pt-1">
+                            Authorized By: Head Registrar ({profile?.id?.substring(0, 8) || 'SYSTEM'})
                         </p>
                     </div>
                 </div>
-
             </div>
         </div>
     );

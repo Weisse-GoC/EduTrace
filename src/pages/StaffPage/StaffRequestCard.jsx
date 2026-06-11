@@ -2,7 +2,8 @@
 import { useState } from 'react';
 import {
     CheckCircle2, FileSearch, XCircle, Clock,
-    ShieldCheck, Upload, FileCheck, Send, Zap
+    ShieldCheck, Upload, FileCheck, Send, Zap,
+    CornerDownLeft, AlertCircle
 } from 'lucide-react';
 
 const StaffRequestCard = ({
@@ -117,6 +118,52 @@ const StaffRequestCard = ({
         onUpdateStatus(req.application_id, 'Rejected', studentName, studentId, req.user_id, { rejectionReason });
     };
 
+    // ── Shared file upload rows ───────────────────────────────────────────────
+    const uploadRows = (
+        <div className="space-y-2 max-h-56 overflow-y-auto mb-4 pr-1">
+            {targetDocs.map((docName, index) => {
+                const fileAttached = cardFiles[docName];
+                return (
+                    <div
+                        key={`${docName}-${index}`}
+                        className={`flex items-center justify-between p-3 rounded-2xl border-2 transition-all duration-200 ${
+                            fileAttached
+                                ? 'border-emerald-500 bg-emerald-50/30'
+                                : 'border-slate-100 bg-slate-50/50'
+                        }`}
+                    >
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            {fileAttached
+                                ? <FileCheck size={16} className="text-emerald-500 shrink-0" />
+                                : <Upload size={16} className="text-slate-300 shrink-0" />
+                            }
+                            <div className="truncate">
+                                <p className="text-[10px] font-black uppercase text-slate-700 truncate">
+                                    {docName}
+                                </p>
+                                {fileAttached && (
+                                    <p className="text-[9px] font-bold text-emerald-600 truncate mt-0.5">
+                                        ✓ {fileAttached.name}
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                        <label className="cursor-pointer bg-slate-900 text-white px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-wide hover:bg-indigo-600 transition-colors shrink-0 ml-2">
+                            <input
+                                type="file"
+                                className="hidden"
+                                accept=".pdf"
+                                disabled={isProcessing}
+                                onChange={e => handleLocalFileChange(docName, e.target.files[0], e)}
+                            />
+                            {fileAttached ? 'Change' : 'Upload'}
+                        </label>
+                    </div>
+                );
+            })}
+        </div>
+    );
+
     // Reusable reject block
     const rejectBlock = (
         <div className="flex flex-col gap-2">
@@ -142,6 +189,7 @@ const StaffRequestCard = ({
     const dotColor = {
         verified:     'bg-emerald-500',
         to_be_issued: 'bg-sky-500',
+        returned:     'bg-amber-500',
         rejected:     'bg-red-500',
         minted:       'bg-indigo-600',
         issued:       'bg-indigo-600',
@@ -151,6 +199,7 @@ const StaffRequestCard = ({
     const badgeColor = {
         verified:     'bg-emerald-500 shadow-emerald-100',
         to_be_issued: 'bg-sky-500 shadow-sky-100',
+        returned:     'bg-amber-500 shadow-amber-100',
         rejected:     'bg-red-500 shadow-red-100',
         minted:       'bg-indigo-600 shadow-indigo-100',
         issued:       'bg-indigo-600 shadow-indigo-100',
@@ -233,17 +282,19 @@ const StaffRequestCard = ({
                                 ].map(dept => {
                                     const isUpdating = updatingClearance === `${req.application_id}:${dept.field}`;
                                     const isCleared  = !!req[dept.field];
+                                    // Clearances are read-only for returned cards — they were already cleared
+                                    const isLocked   = status === 'returned' || status !== 'pending';
 
                                     return (
                                         <button
                                             key={dept.field}
-                                            disabled={status !== 'pending' || isUpdating || isProcessing}
+                                            disabled={isLocked || isUpdating || isProcessing}
                                             onClick={() => onToggleClearance(req.application_id, dept.field, req[dept.field])}
                                             className={`p-5 rounded-2xl border-2 flex items-center justify-between transition-all duration-300 ${
                                                 isCleared
                                                     ? 'bg-white border-emerald-500 text-emerald-600 shadow-md'
                                                     : 'bg-white/50 border-slate-200 text-slate-400 grayscale'
-                                            } ${status !== 'pending' || isUpdating || isProcessing
+                                            } ${isLocked || isUpdating || isProcessing
                                                 ? 'cursor-default opacity-80'
                                                 : 'hover:border-indigo-300 hover:scale-[1.02]'
                                             }`}
@@ -266,7 +317,61 @@ const StaffRequestCard = ({
                         {/* RIGHT — Decision center */}
                         <div className="flex flex-col justify-end">
 
-                            {status === 'pending' && isFullyCleared ? (
+                            {/* ── RETURNED: re-upload panel ─────────────────────────────── */}
+                            {status === 'returned' ? (
+
+                                <div className="bg-white p-6 rounded-3xl border-2 border-amber-200 shadow-xl shadow-amber-50/50 animate-in zoom-in-95 duration-500">
+
+                                    {/* Reason banner */}
+                                    {req.rejection_reason && (
+                                        <div className="flex items-start gap-2 mb-4 p-3 bg-amber-50 rounded-2xl border border-amber-100">
+                                            <AlertCircle size={13} className="text-amber-500 shrink-0 mt-0.5" />
+                                            <p className="text-[10px] font-bold text-amber-600 leading-relaxed">
+                                                {req.rejection_reason.replace('[RETURNED] ', '')}
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    <p className="text-[10px] font-black uppercase text-amber-600 tracking-widest mb-4 flex items-center gap-2">
+                                        <CornerDownLeft size={14} />
+                                        Re-upload Corrected Documents ({totalUploadedCount}/{targetDocs.length})
+                                    </p>
+
+                                    {uploadRows}
+
+                                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest mb-4">
+                                        Upload corrected files, then re-forward for head review.
+                                    </p>
+
+                                    <div className="flex gap-3">
+                                        {requiresHeadReview ? (
+                                            <button
+                                                disabled={!isComplete || isProcessing}
+                                                onClick={handlePushToHead}
+                                                className="flex-1 py-5 bg-slate-900 hover:bg-amber-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-[0.2em] shadow-xl transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                            >
+                                                {isProcessing
+                                                    ? <><Clock size={16} className="animate-spin" /> Uploading to IPFS...</>
+                                                    : <><Send size={16} /> Re-submit to Head</>
+                                                }
+                                            </button>
+                                        ) : (
+                                            <button
+                                                disabled={!isComplete || isProcessing}
+                                                onClick={handlePushForIssuance}
+                                                className="flex-1 py-5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black uppercase text-[10px] tracking-[0.2em] shadow-xl shadow-indigo-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                            >
+                                                {isProcessing
+                                                    ? <><Clock size={16} className="animate-spin" /> Uploading to IPFS...</>
+                                                    : <><Upload size={16} /> Re-submit for Issuance</>
+                                                }
+                                            </button>
+                                        )}
+                                        {rejectBlock}
+                                    </div>
+                                </div>
+
+                            ) : status === 'pending' && isFullyCleared ? (
 
                                 requiresHeadReview ? (
                                     <div className="bg-white p-6 rounded-3xl border-2 border-amber-100 shadow-xl shadow-amber-50/50 animate-in zoom-in-95 duration-500">
@@ -274,48 +379,7 @@ const StaffRequestCard = ({
                                             <Upload size={14} /> Step 2: Attach & Forward ({totalUploadedCount}/{targetDocs.length})
                                         </p>
 
-                                        <div className="space-y-2 max-h-56 overflow-y-auto mb-4 pr-1">
-                                            {targetDocs.map((docName, index) => {
-                                                const fileAttached = cardFiles[docName];
-                                                return (
-                                                    <div
-                                                        key={`${docName}-${index}`}
-                                                        className={`flex items-center justify-between p-3 rounded-2xl border-2 transition-all duration-200 ${
-                                                            fileAttached
-                                                                ? 'border-emerald-500 bg-emerald-50/30'
-                                                                : 'border-slate-100 bg-slate-50/50'
-                                                        }`}
-                                                    >
-                                                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                                            {fileAttached
-                                                                ? <FileCheck size={16} className="text-emerald-500 shrink-0" />
-                                                                : <Upload size={16} className="text-slate-300 shrink-0" />
-                                                            }
-                                                            <div className="truncate">
-                                                                <p className="text-[10px] font-black uppercase text-slate-700 truncate">
-                                                                    {docName}
-                                                                </p>
-                                                                {fileAttached && (
-                                                                    <p className="text-[9px] font-bold text-emerald-600 truncate mt-0.5">
-                                                                        ✓ {fileAttached.name}
-                                                                    </p>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                        <label className="cursor-pointer bg-slate-900 text-white px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-wide hover:bg-indigo-600 transition-colors shrink-0 ml-2">
-                                                            <input
-                                                                type="file"
-                                                                className="hidden"
-                                                                accept=".pdf"
-                                                                disabled={isProcessing}
-                                                                onChange={e => handleLocalFileChange(docName, e.target.files[0], e)}
-                                                            />
-                                                            {fileAttached ? 'Change' : 'Upload'}
-                                                        </label>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
+                                        {uploadRows}
 
                                         <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest mb-4">
                                             Files upload to IPFS, then head reviews and authorises minting.
@@ -342,48 +406,7 @@ const StaffRequestCard = ({
                                             <Upload size={14} /> Step 2: Attach Documents ({totalUploadedCount}/{targetDocs.length})
                                         </p>
 
-                                        <div className="space-y-2 max-h-56 overflow-y-auto mb-4 pr-1">
-                                            {targetDocs.map((docName, index) => {
-                                                const fileAttached = cardFiles[docName];
-                                                return (
-                                                    <div
-                                                        key={`${docName}-${index}`}
-                                                        className={`flex items-center justify-between p-3 rounded-2xl border-2 transition-all duration-200 ${
-                                                            fileAttached
-                                                                ? 'border-emerald-500 bg-emerald-50/30'
-                                                                : 'border-slate-100 bg-slate-50/50'
-                                                        }`}
-                                                    >
-                                                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                                            {fileAttached
-                                                                ? <FileCheck size={16} className="text-emerald-500 shrink-0" />
-                                                                : <Upload size={16} className="text-slate-300 shrink-0" />
-                                                            }
-                                                            <div className="truncate">
-                                                                <p className="text-[10px] font-black uppercase text-slate-700 truncate">
-                                                                    {docName}
-                                                                </p>
-                                                                {fileAttached && (
-                                                                    <p className="text-[9px] font-bold text-emerald-600 truncate mt-0.5">
-                                                                        ✓ {fileAttached.name}
-                                                                    </p>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                        <label className="cursor-pointer bg-slate-900 text-white px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-wide hover:bg-indigo-600 transition-colors shrink-0 ml-2">
-                                                            <input
-                                                                type="file"
-                                                                className="hidden"
-                                                                accept=".pdf"
-                                                                disabled={isProcessing}
-                                                                onChange={e => handleLocalFileChange(docName, e.target.files[0], e)}
-                                                            />
-                                                            {fileAttached ? 'Change' : 'Upload'}
-                                                        </label>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
+                                        {uploadRows}
 
                                         <div className="flex gap-3">
                                             <button

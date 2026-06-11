@@ -12,7 +12,9 @@ import {
   ChevronDown, 
   CheckCircle, 
   UploadCloud, 
-  RefreshCw 
+  RefreshCw,
+  CornerDownLeft,
+  MessageSquare
 } from 'lucide-react';
 
 const IPFS_GATEWAY = "https://gateway.pinata.cloud/ipfs/";
@@ -32,6 +34,16 @@ const parseCustomIpfsBundle = (ipfsCid) => {
     }).filter(doc => doc.cid.length > 0);
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ROUTE CONTEXT
+// This console handles the "Verified" route only:
+//   Verified → Head Registrar reviews here → mints via "Authorize & Mint Bundle"
+//   To_be_Issued → Staff mints directly from StaffDashboard (handleMintRequest)
+//
+// A "Returned" status means the Head has rejected the uploaded bundle.
+// The ipfs_cid is cleared server-side; staff must re-upload and re-submit.
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function StaffIssuanceConsole() {
     const { docId } = useParams(); 
     const navigate = useNavigate();
@@ -47,6 +59,11 @@ export default function StaffIssuanceConsole() {
 
     const [decryptedUrls, setDecryptedUrls] = useState({});
     const [isDecrypting, setIsDecrypting] = useState(false);
+
+    // Return flow state
+    const [isReturning, setIsReturning] = useState(false);
+    const [showReturnPanel, setShowReturnPanel] = useState(false);
+    const [returnReason, setReturnReason] = useState('');
     
     const urlsRef = useRef({});
     const fileInputRef = useRef(null); 
@@ -54,6 +71,13 @@ export default function StaffIssuanceConsole() {
     const [loading, setLoading] = useState(true);
     const [isMinting, setIsMinting] = useState(false);
     const [mintingStep, setMintingStep] = useState('');
+
+    // ── Derived status helpers ────────────────────────────────────────────────
+    const currentStatus = appData?.status;
+    const isReturned    = currentStatus === 'Returned';
+    const isAlreadyIssued = ['L1_Issued', 'Minted', 'Issued'].includes(currentStatus);
+    // "To_be_Issued" cards are minted directly from the dashboard, not here
+    const isToBeMintedHere = currentStatus === 'Verified' || currentStatus === 'L1_Issued';
 
     const handleFileChange = (e) => {
         if (e.target.files) {
@@ -97,6 +121,54 @@ export default function StaffIssuanceConsole() {
             alert(`Reset error: ${error.message}`);
         } finally {
             setLoading(false);
+        }
+    };
+
+    // ── Return to Staff ───────────────────────────────────────────────────────
+    // Sets status → "Returned", clears ipfs_cid so staff must re-upload,
+    // and stores the reason in rejection_reason (prefixed [RETURNED]).
+    // Verify.jsx "Returned by Head" tab surfaces these to staff.
+    const handleReturnToStaff = async () => {
+        const reason = returnReason.trim();
+        if (!reason) return alert('Please enter a reason before returning.');
+
+        if (!window.confirm("Return this application to staff for correction? The uploaded bundle will be cleared.")) return;
+
+        setIsReturning(true);
+        try {
+            const { error } = await supabase
+                .from('student_applications')
+                .update({
+                    status: 'Returned',
+                    ipfs_cid: null,
+                    rejection_reason: `[RETURNED] ${reason}`,
+                    reopened_at: new Date().toISOString(),
+                })
+                .eq('application_id', docId);
+
+            if (error) throw error;
+
+            setAppData(prev => prev ? {
+                ...prev,
+                status: 'Returned',
+                ipfs_cid: null,
+                rejection_reason: `[RETURNED] ${reason}`,
+            } : null);
+
+            setUploadedCidString('');
+            setDocuments([]);
+            setActiveDocName(null);
+            clearRevocationUrls();
+            setShowReturnPanel(false);
+            setReturnReason('');
+
+            alert("Application returned to staff for correction.");
+            navigate('/staff/dashboard');
+        } catch (error) {
+            console.error("Return failed:", error);
+            alert(`Return failed: ${error.message}`);
+        } finally {
+            setIsReturning(false);
         }
     };
 
@@ -246,7 +318,9 @@ export default function StaffIssuanceConsole() {
         if (docId) fetchDetails();
     }, [docId]);
 
-    // 🌐 WEB3 INTERCEPT IMPLEMENTATION MIGRATED HERE
+    // ── MINT — only fires for the "Verified" route ────────────────────────────
+    // "To_be_Issued" applications are minted directly from StaffDashboard
+    // via handleMintRequest → they never land on this page.
     const handleIssueAndMint = async () => {
         const recipientId = appData?.student_records?.id;
         const ipfsCid = uploadedCidString || appData?.ipfs_cid;
@@ -255,14 +329,14 @@ export default function StaffIssuanceConsole() {
             alert("Error: Missing Student Record ID or IPFS CID configuration. Cannot mint.");
             return;
         }
-        
+
         if (!window.confirm("Authorize Blockchain Minting to Arbitrum Sepolia?")) return;
 
         setIsMinting(true);
         setMintingStep('Initiating L1 Transaction...');
         
         try {
-            // 1. Invoke the Web3 edge contract mint method sequence 
+            // 1. Invoke the Web3 edge contract mint method sequence
             const { data, error } = await supabase.functions.invoke('mint-credential', {
                 body: { 
                     applicationId: docId,
@@ -278,19 +352,23 @@ export default function StaffIssuanceConsole() {
 
             const returnedHash = data?.txHash || data?.hash || "SUCCESS";
             
-            // 2. 🛡️ INTEGRITY SAFEGUARD: ONLY update state to database after transaction succeeds on-chain
+            // 2. 🛡️ INTEGRITY SAFEGUARD: only update DB after on-chain confirmation
             setMintingStep('Validating transaction on-chain...');
             
             const { error: dbUpdateError } = await supabase
                 .from('student_applications')
-                .update({ 
-                    status: 'L1_Issued'
-                })
+                .update({ status: 'L1_Issued' })
                 .eq('application_id', docId);
 
             if (dbUpdateError) {
-                throw new Error(`Blockchain minted successfully (${returnedHash}), but DB status update failed: ${dbUpdateError.message}`);
+                throw new Error(`Blockchain minted (${returnedHash}), but DB status update failed: ${dbUpdateError.message}`);
             }
+
+            // 3. Mark credential log as fully issued (mirrors dashboard handleMintRequest)
+            await supabase
+                .from('credentials')
+                .update({ status: 'Issued' })
+                .eq('application_id', docId);
 
             setMintingStep('Success! Transaction Hash: ' + returnedHash.substring(0, 10) + '...');
             alert("Asset successfully minted on Arbitrum and status registered to database!");
@@ -327,11 +405,58 @@ export default function StaffIssuanceConsole() {
                     <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tighter italic">Staff Verification & Issuance</h1>
                     <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">Level 1 Processing Terminal — Bundle ID: {docId?.substring(0, 8)}</p>
                 </div>
+
+                {/* Status pill — reflects the full status vocabulary from Dashboard */}
+                {currentStatus && (
+                    <span className={`px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest border ${
+                        isAlreadyIssued    ? 'bg-emerald-50 text-emerald-600 border-emerald-200' :
+                        isReturned         ? 'bg-amber-50 text-amber-600 border-amber-200' :
+                        currentStatus === 'Verified' ? 'bg-indigo-50 text-indigo-600 border-indigo-200' :
+                        'bg-slate-100 text-slate-500 border-slate-200'
+                    }`}>
+                        {currentStatus.replace('_', ' ')}
+                    </span>
+                )}
             </div>
+
+            {/* ── Returned banner — mirrors Verify.jsx "Returned by Head" info banner ── */}
+            {isReturned && (
+                <div className="flex items-start gap-3 p-5 bg-amber-50 border border-amber-200 rounded-3xl mb-6">
+                    <CornerDownLeft size={16} className="text-amber-500 shrink-0 mt-0.5" />
+                    <div>
+                        <p className="text-[10px] font-black text-amber-700 uppercase tracking-widest">
+                            Returned by Head Registrar
+                        </p>
+                        <p className="text-[10px] font-bold text-amber-600 mt-0.5 leading-relaxed">
+                            This application was returned. The uploaded bundle has been cleared.
+                            {appData?.rejection_reason && (
+                                <span className="block mt-1 text-amber-500">
+                                    Reason: {appData.rejection_reason.replace('[RETURNED] ', '')}
+                                </span>
+                            )}
+                        </p>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Already issued banner ─────────────────────────────────────── */}
+            {isAlreadyIssued && (
+                <div className="flex items-start gap-3 p-5 bg-emerald-50 border border-emerald-200 rounded-3xl mb-6">
+                    <CheckCircle size={16} className="text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                        <p className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">
+                            Credential Already Issued
+                        </p>
+                        <p className="text-[10px] font-bold text-emerald-600 mt-0.5 leading-relaxed">
+                            This credential has been minted on-chain. Re-minting is disabled to protect the ledger state.
+                        </p>
+                    </div>
+                </div>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                 
-                {/* Left Column */}
+                {/* ── Left Column ──────────────────────────────────────────── */}
                 <div className="lg:col-span-8 space-y-4">
                     {!uploadedCidString ? (
                         <div className="bg-white rounded-[3rem] border border-dashed border-slate-300 p-16 text-center shadow-sm">
@@ -428,9 +553,73 @@ export default function StaffIssuanceConsole() {
                             })}
                         </div>
                     )}
+
+                    {/* ── Return to Staff panel ──────────────────────────────── */}
+                    {/* Only show when there IS a bundle to review and it hasn't been issued yet */}
+                    {uploadedCidString && !isAlreadyIssued && !isMinting && (
+                        <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden">
+                            <button
+                                type="button"
+                                onClick={() => setShowReturnPanel(v => !v)}
+                                className="w-full flex items-center justify-between p-6 px-8 bg-slate-50 hover:bg-amber-50 transition-colors text-left"
+                            >
+                                <div className="flex items-center gap-4">
+                                    <div className={`p-2 rounded-xl transition-colors ${showReturnPanel ? 'bg-amber-100 text-amber-600' : 'bg-slate-200/60 text-slate-400'}`}>
+                                        <CornerDownLeft size={18} />
+                                    </div>
+                                    <div>
+                                        <span className="font-black text-slate-800 text-xs uppercase tracking-wider block">
+                                            Return to Staff
+                                        </span>
+                                        <span className="text-[10px] text-slate-400 font-bold">
+                                            Clear bundle and request a corrected re-upload
+                                        </span>
+                                    </div>
+                                </div>
+                                <ChevronDown 
+                                    size={16} 
+                                    className={`text-slate-400 transition-transform duration-200 ${showReturnPanel ? 'rotate-180 text-amber-500' : ''}`} 
+                                />
+                            </button>
+
+                            {showReturnPanel && (
+                                <div className="px-8 pb-8 pt-0 border-t border-slate-100 space-y-4 animate-in slide-in-from-top-2 duration-200">
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest pt-6 flex items-center gap-2">
+                                        <MessageSquare size={12} />
+                                        Reason for returning
+                                    </p>
+                                    <textarea
+                                        rows={3}
+                                        placeholder="e.g. Wrong document uploaded, TOR is missing page 2, please re-scan and resubmit..."
+                                        value={returnReason}
+                                        onChange={(e) => setReturnReason(e.target.value)}
+                                        className="w-full p-4 rounded-2xl border border-slate-100 bg-slate-50 text-sm font-bold text-slate-700 focus:outline-none focus:border-amber-300 focus:ring-4 focus:ring-amber-50 resize-none transition-all"
+                                    />
+                                    <div className="flex justify-end gap-3">
+                                        <button
+                                            onClick={() => { setShowReturnPanel(false); setReturnReason(''); }}
+                                            className="px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-colors"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={handleReturnToStaff}
+                                            disabled={isReturning || !returnReason.trim()}
+                                            className="flex items-center gap-2 px-8 py-3 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all shadow-lg shadow-amber-100"
+                                        >
+                                            {isReturning
+                                                ? <><Loader2 size={13} className="animate-spin" /> Returning...</>
+                                                : <><CornerDownLeft size={13} /> Confirm Return</>
+                                            }
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
 
-                {/* Right Column */}
+                {/* ── Right Column ─────────────────────────────────────────── */}
                 <div className="lg:col-span-4 bg-slate-900 text-white p-8 rounded-[3rem] shadow-2xl flex flex-col justify-between border border-slate-800 lg:sticky lg:top-10">
                     <div>
                         <div className="flex items-center justify-between mb-8">
@@ -441,7 +630,7 @@ export default function StaffIssuanceConsole() {
                                 <h3 className="text-xs font-black uppercase text-emerald-400 tracking-[0.2em]">Staff Audit Context</h3>
                             </div>
                             
-                            {uploadedCidString && !isMinting && (
+                            {uploadedCidString && !isMinting && !isAlreadyIssued && (
                                 <button 
                                     onClick={handleClearBundle}
                                     title="Reset current bundle configuration"
@@ -482,6 +671,24 @@ export default function StaffIssuanceConsole() {
                                 </div>
                             </div>
 
+                            {/* Routing indicator — clarifies which mint path applies */}
+                            <div>
+                                <p className="text-[9px] text-white/30 uppercase tracking-widest mb-2 font-black">Issuance Route</p>
+                                <p className={`text-[10px] font-bold uppercase tracking-widest ${
+                                    currentStatus === 'To_be_Issued'
+                                        ? 'text-amber-400'
+                                        : isAlreadyIssued
+                                        ? 'text-emerald-400'
+                                        : 'text-indigo-300'
+                                }`}>
+                                    {currentStatus === 'To_be_Issued'
+                                        ? 'Staff Self-Issue (Dashboard)'
+                                        : isAlreadyIssued
+                                        ? 'Issued · Ledger Finalized'
+                                        : 'Head Registrar Mint (This Page)'}
+                                </p>
+                            </div>
+
                             <div>
                                 <p className="text-[9px] text-white/30 uppercase tracking-widest mb-2 font-black">Target L1 IPFS Array</p>
                                 <p className="text-[8px] font-mono text-slate-500 break-all bg-black/40 p-3 rounded-xl border border-white/5 max-h-28 overflow-y-auto">
@@ -491,16 +698,34 @@ export default function StaffIssuanceConsole() {
                         </div>
                     </div>
 
-                    {/* Action Panel */}
+                    {/* ── Action Panel ─────────────────────────────────────── */}
                     <div className="space-y-4">
-                        <button 
-                            onClick={handleIssueAndMint}
-                            disabled={isMinting || !uploadedCidString} 
-                            className="w-full py-6 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 rounded-4xl font-black uppercase text-[10px] tracking-[0.2em] flex items-center justify-center gap-3 transition-all shadow-xl shadow-indigo-900/20"
-                        >
-                            {isMinting ? <Loader2 className="animate-spin" size={18} /> : <Zap size={18} />}
-                            {isMinting ? "Processing Transaction..." : "Authorize & Mint Bundle"}
-                        </button>
+
+                        {/* To_be_Issued: redirect to dashboard rather than minting here */}
+                        {currentStatus === 'To_be_Issued' && (
+                            <div className="bg-amber-500/10 border border-amber-500/20 p-4 rounded-2xl">
+                                <p className="text-center text-[9px] text-amber-400 uppercase font-black tracking-widest leading-relaxed">
+                                    This credential is queued for staff self-issue.
+                                    Use "Issue to Student" on the dashboard.
+                                </p>
+                            </div>
+                        )}
+
+                        {/* Standard mint button — Verified route only */}
+                        {currentStatus !== 'To_be_Issued' && (
+                            <button 
+                                onClick={handleIssueAndMint}
+                                disabled={isMinting || !uploadedCidString || isAlreadyIssued} 
+                                className="w-full py-6 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 rounded-4xl font-black uppercase text-[10px] tracking-[0.2em] flex items-center justify-center gap-3 transition-all shadow-xl shadow-indigo-900/20"
+                            >
+                                {isMinting ? <Loader2 className="animate-spin" size={18} /> : <Zap size={18} />}
+                                {isAlreadyIssued
+                                    ? 'Credential Finalized'
+                                    : isMinting
+                                    ? 'Processing Transaction...'
+                                    : 'Authorize & Mint Bundle'}
+                            </button>
+                        )}
                         
                         {isMinting && (
                             <div className="bg-indigo-500/10 border border-indigo-500/20 p-4 rounded-2xl">
