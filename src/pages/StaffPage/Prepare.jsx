@@ -254,7 +254,7 @@ export default function StaffIssuanceConsole() {
             if (!token) throw new Error("Active session token not found.");
 
             const response = await fetch(
-                `${supabase.supabaseUrl}/functions/v1/ipfs-upload?cid=${doc.cid}`, 
+                `${supabase.supabaseUrl}/functions/v1/ipfs-upload?cid=${doc.cid}&raw=true`, 
                 {
                     method: 'GET',
                     headers: { 'Authorization': `Bearer ${token}` }

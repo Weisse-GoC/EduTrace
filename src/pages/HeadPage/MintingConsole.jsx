@@ -59,7 +59,7 @@ export default function MintingConsole() {
             const { data: { session } } = await supabase.auth.getSession();
             const token = session?.access_token || supabase.supabaseKey;
             const response = await fetch(
-                `${supabase.supabaseUrl}/functions/v1/ipfs-upload?cid=${doc.cid}&applicationId=${docId}`,
+                `${supabase.supabaseUrl}/functions/v1/ipfs-upload?cid=${doc.cid}&raw=true`,
                 { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } }
             );
             if (!response.ok) throw new Error(`Edge Function responded with status: ${response.status}`);
